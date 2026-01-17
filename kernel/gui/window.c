@@ -1000,14 +1000,8 @@ static void draw_menu_bar(void)
     /* Apple logo (using @ as placeholder, bold white) */
     gui_draw_string(14, 6, "@", 0xFFFFFF, 0x2D2D35);
     
-    /* Vib-OS name */
+    /* Vib-OS name (bold) */
     gui_draw_string(36, 6, "Vib-OS", 0xFFFFFF, 0x303038);
-    
-    /* Menu items with spacing */
-    gui_draw_string(100, 6, "File", 0xDDDDDD, 0x343440);
-    gui_draw_string(150, 6, "Edit", 0xDDDDDD, 0x363645);
-    gui_draw_string(200, 6, "View", 0xDDDDDD, 0x38384A);
-    gui_draw_string(254, 6, "Help", 0xDDDDDD, 0x3A3A4F);
     
     /* Clock on right */
     gui_draw_string(primary_display.width - 52, 6, "12:00", 0xFFFFFF, 0x3E3E55);
@@ -1516,35 +1510,14 @@ void gui_handle_mouse_event(int x, int y, int buttons)
         
         /* Menu bar clicks */
         if (y < MENU_BAR_HEIGHT) {
-            /* Apple menu / Vib-OS logo area (x < 90) */
+            /* Apple menu / Vib-OS logo area (x < 90) - toggle dropdown */
             if (x < 90) {
-                menu_open = menu_open ? 0 : 1;  /* Toggle */
+                menu_open = menu_open ? 0 : 1;
                 return;
             }
             
             /* Close menu if clicking elsewhere on menu bar */
             menu_open = 0;
-            
-            /* File menu (x=100-145) */
-            if (x >= 100 && x < 145) {
-                gui_create_window("Files", 150, 80, 400, 350);
-                return;
-            }
-            /* Edit menu (x=150-195) */
-            if (x >= 150 && x < 195) {
-                gui_create_window("Notepad", 180, 100, 450, 350);
-                return;
-            }
-            /* View menu (x=200-248) */
-            if (x >= 200 && x < 248) {
-                /* Toggle a window or do nothing */
-                return;
-            }
-            /* Help menu (x=254-300) */
-            if (x >= 254 && x < 310) {
-                gui_create_window("Help", 200, 100, 350, 280);
-                return;
-            }
         }
         return;
     }
