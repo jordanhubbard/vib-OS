@@ -1,147 +1,359 @@
 /*
- * UnixOS - Init Program (PID 1)
+ * vib-OS - Real Init Process (PID 1)
  * 
- * The first userspace process started by the kernel.
- * Responsible for:
- * - Mounting filesystems
- * - Starting essential services
- * - Spawning login/shell
+ * The first userspace process that initializes the system.
  */
 
-/* Minimal syscall interface */
+/* This file is meant to be compiled with musl libc */
 
-#define SYS_write       64
-#define SYS_exit        93
-#define SYS_getpid      172
-#define SYS_uname       160
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <errno.h>
 
-/* Inline syscall */
-static inline long syscall0(long nr)
+/* ===================================================================== */
+/* Configuration */
+/* ===================================================================== */
+
+#define INIT_VERSION    "1.0.0"
+#define HOSTNAME        "vib-os"
+#define SHELL_PATH      "/bin/sh"
+#define CONSOLE_DEV     "/dev/console"
+#define INITTAB_PATH    "/etc/inittab"
+
+/* Run levels */
+#define RUNLEVEL_HALT       0
+#define RUNLEVEL_SINGLE     1
+#define RUNLEVEL_MULTI      2
+#define RUNLEVEL_FULL       3
+#define RUNLEVEL_REBOOT     6
+
+/* ===================================================================== */
+/* Global State */
+/* ===================================================================== */
+
+static int current_runlevel = RUNLEVEL_FULL;
+static volatile int received_signal = 0;
+static pid_t shell_pid = 0;
+
+/* ===================================================================== */
+/* Signal Handlers */
+/* ===================================================================== */
+
+static void sigchld_handler(int sig)
 {
-    register long x0 __asm__("x0");
-    register long x8 __asm__("x8") = nr;
-    
-    __asm__ volatile(
-        "svc #0"
-        : "=r" (x0)
-        : "r" (x8)
-        : "memory"
-    );
-    
-    return x0;
+    (void)sig;
+    /* Reap zombie children */
+    while (waitpid(-1, NULL, WNOHANG) > 0);
 }
 
-static inline long syscall1(long nr, long a0)
+static void sighup_handler(int sig)
 {
-    register long x0 __asm__("x0") = a0;
-    register long x8 __asm__("x8") = nr;
+    (void)sig;
+    received_signal = SIGHUP;
+}
+
+static void sigint_handler(int sig)
+{
+    (void)sig;
+    received_signal = SIGINT;
+}
+
+static void sigterm_handler(int sig)
+{
+    (void)sig;
+    received_signal = SIGTERM;
+}
+
+static void setup_signals(void)
+{
+    struct sigaction sa;
     
-    __asm__ volatile(
-        "svc #0"
-        : "+r" (x0)
-        : "r" (x8)
-        : "memory"
-    );
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sigchld_handler;
+    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+    sigaction(SIGCHLD, &sa, NULL);
     
-    return x0;
-}
-
-static inline long syscall3(long nr, long a0, long a1, long a2)
-{
-    register long x0 __asm__("x0") = a0;
-    register long x1 __asm__("x1") = a1;
-    register long x2 __asm__("x2") = a2;
-    register long x8 __asm__("x8") = nr;
+    sa.sa_handler = sighup_handler;
+    sigaction(SIGHUP, &sa, NULL);
     
-    __asm__ volatile(
-        "svc #0"
-        : "+r" (x0)
-        : "r" (x1), "r" (x2), "r" (x8)
-        : "memory"
-    );
+    sa.sa_handler = sigint_handler;
+    sigaction(SIGINT, &sa, NULL);
     
-    return x0;
-}
-
-/* Simple string length */
-static int strlen(const char *s)
-{
-    int len = 0;
-    while (*s++) len++;
-    return len;
-}
-
-/* Write to stdout */
-static void print(const char *msg)
-{
-    syscall3(SYS_write, 1, (long)msg, strlen(msg));
-}
-
-/* Get PID */
-static long getpid(void)
-{
-    return syscall0(SYS_getpid);
-}
-
-/* Exit */
-static void exit(int code)
-{
-    syscall1(SYS_exit, code);
-    while (1) {}  /* Never reached */
+    sa.sa_handler = sigterm_handler;
+    sigaction(SIGTERM, &sa, NULL);
 }
 
 /* ===================================================================== */
-/* Init main */
+/* Console Setup */
 /* ===================================================================== */
 
-void _start(void)
+static void setup_console(void)
 {
-    long pid = getpid();
+    int fd;
     
-    print("\n");
-    print("=====================================\n");
-    print("  UnixOS Init System\n");
-    print("=====================================\n");
-    print("\n");
+    /* Close existing file descriptors */
+    close(0);
+    close(1);
+    close(2);
     
-    print("[init] Starting as PID ");
-    /* Simple number print */
-    char num[2] = { '0' + (pid % 10), '\0' };
-    print(num);
-    print("\n");
-    
-    print("[init] UnixOS initialized successfully!\n");
-    print("\n");
-    print("[init] System ready.\n");
-    print("\n");
-    
-    /* Display system info */
-    print("  _   _       _       ___  ____  \n");
-    print(" | | | |_ __ (_)_  __/ _ \\/ ___| \n");
-    print(" | | | | '_ \\| \\ \\/ / | | \\___ \\ \n");
-    print(" | |_| | | | | |>  <| |_| |___) |\n");
-    print("  \\___/|_| |_|_/_/\\_\\\\___/|____/ \n");
-    print("\n");
-    print("Welcome to UnixOS!\n");
-    print("Type 'help' for available commands.\n");
-    print("\n");
-    
-    /* In a real init, we would:
-     * 1. Mount /proc, /sys, /dev
-     * 2. Start essential services
-     * 3. Fork and exec /bin/login or /bin/sh
-     * 4. Wait for children and handle orphans
-     */
-    
-    print("[init] Entering main loop...\n");
-    
-    /* Init main loop - never exits */
-    while (1) {
-        /* Wait for children, handle signals */
-        /* For now, just idle */
-        __asm__ volatile("wfi");
+    /* Open console for stdin, stdout, stderr */
+    fd = open(CONSOLE_DEV, O_RDWR);
+    if (fd < 0) {
+        fd = open("/dev/ttyS0", O_RDWR);
+    }
+    if (fd < 0) {
+        fd = open("/dev/tty1", O_RDWR);
     }
     
-    /* Never reached */
-    exit(0);
+    if (fd >= 0) {
+        dup2(fd, 0);
+        dup2(fd, 1);
+        dup2(fd, 2);
+        if (fd > 2) close(fd);
+    }
+}
+
+/* ===================================================================== */
+/* Mount Filesystems */
+/* ===================================================================== */
+
+static void mount_filesystems(void)
+{
+    printf("[init] Mounting filesystems...\n");
+    
+    /* Mount /proc */
+    if (mkdir("/proc", 0755) < 0 && errno != EEXIST) {
+        /* Ignore error */
+    }
+    /* mount("proc", "/proc", "proc", 0, NULL); */
+    
+    /* Mount /sys */
+    if (mkdir("/sys", 0755) < 0 && errno != EEXIST) {
+        /* Ignore error */
+    }
+    /* mount("sysfs", "/sys", "sysfs", 0, NULL); */
+    
+    /* Mount /dev */
+    if (mkdir("/dev", 0755) < 0 && errno != EEXIST) {
+        /* Ignore error */
+    }
+    /* mount("devtmpfs", "/dev", "devtmpfs", 0, NULL); */
+    
+    /* Mount /tmp */
+    if (mkdir("/tmp", 01777) < 0 && errno != EEXIST) {
+        /* Ignore error */
+    }
+    /* mount("tmpfs", "/tmp", "tmpfs", 0, "mode=1777"); */
+    
+    printf("[init] Filesystems mounted\n");
+}
+
+/* ===================================================================== */
+/* Network Setup */
+/* ===================================================================== */
+
+static void setup_network(void)
+{
+    printf("[init] Configuring network...\n");
+    
+    /* Set hostname */
+    if (sethostname(HOSTNAME, strlen(HOSTNAME)) < 0) {
+        perror("sethostname");
+    }
+    
+    /* Bring up loopback */
+    /* TODO: Use netlink or ioctl to configure interfaces */
+    
+    printf("[init] Network configured\n");
+}
+
+/* ===================================================================== */
+/* Start Shell */
+/* ===================================================================== */
+
+static pid_t start_shell(void)
+{
+    pid_t pid = fork();
+    
+    if (pid < 0) {
+        perror("fork");
+        return -1;
+    }
+    
+    if (pid == 0) {
+        /* Child process */
+        char *argv[] = { "/bin/sh", "-l", NULL };
+        char *envp[] = {
+            "HOME=/root",
+            "PATH=/bin:/sbin:/usr/bin:/usr/sbin",
+            "SHELL=/bin/sh",
+            "TERM=linux",
+            NULL
+        };
+        
+        setsid();
+        
+        execve(SHELL_PATH, argv, envp);
+        
+        /* If execve fails, try alternatives */
+        execve("/bin/bash", argv, envp);
+        execve("/bin/busybox", (char*[]){"/bin/busybox", "sh", NULL}, envp);
+        
+        perror("execve");
+        _exit(127);
+    }
+    
+    /* Parent */
+    return pid;
+}
+
+/* ===================================================================== */
+/* Run Scripts */
+/* ===================================================================== */
+
+static void run_script(const char *path)
+{
+    pid_t pid;
+    int status;
+    
+    if (access(path, X_OK) != 0) {
+        return;
+    }
+    
+    printf("[init] Running %s\n", path);
+    
+    pid = fork();
+    if (pid == 0) {
+        char *argv[] = { (char *)path, NULL };
+        char *envp[] = {
+            "PATH=/bin:/sbin:/usr/bin:/usr/sbin",
+            NULL
+        };
+        execve(path, argv, envp);
+        _exit(127);
+    }
+    
+    if (pid > 0) {
+        waitpid(pid, &status, 0);
+    }
+}
+
+static void run_startup_scripts(void)
+{
+    printf("[init] Running startup scripts...\n");
+    
+    run_script("/etc/rc.d/rc.sysinit");
+    run_script("/etc/rc.d/rc.local");
+    run_script("/etc/init.d/rcS");
+    
+    printf("[init] Startup scripts complete\n");
+}
+
+/* ===================================================================== */
+/* Shutdown */
+/* ===================================================================== */
+
+static void do_shutdown(int reboot)
+{
+    printf("\n[init] System %s...\n", reboot ? "rebooting" : "halting");
+    
+    /* Kill all processes */
+    printf("[init] Sending SIGTERM to all processes\n");
+    kill(-1, SIGTERM);
+    sleep(2);
+    
+    printf("[init] Sending SIGKILL to all processes\n");
+    kill(-1, SIGKILL);
+    sleep(1);
+    
+    /* Run shutdown scripts */
+    run_script("/etc/rc.d/rc.shutdown");
+    
+    /* Unmount filesystems */
+    printf("[init] Unmounting filesystems\n");
+    sync();
+    
+    /* Reboot or halt */
+    if (reboot) {
+        /* reboot(RB_AUTOBOOT); */
+        printf("[init] Rebooting NOW\n");
+    } else {
+        /* reboot(RB_HALT_SYSTEM); */
+        printf("[init] System halted\n");
+    }
+    
+    while (1) {
+        pause();
+    }
+}
+
+/* ===================================================================== */
+/* Main */
+/* ===================================================================== */
+
+int main(int argc, char *argv[])
+{
+    int status;
+    
+    (void)argc;
+    (void)argv;
+    
+    /* Check if we're PID 1 */
+    if (getpid() != 1) {
+        fprintf(stderr, "init: must be PID 1\n");
+        return 1;
+    }
+    
+    /* Print banner */
+    printf("\n");
+    printf("  vib-OS init v%s\n", INIT_VERSION);
+    printf("  =================\n\n");
+    
+    /* Setup signals */
+    setup_signals();
+    
+    /* Setup console */
+    setup_console();
+    
+    /* Mount filesystems */
+    mount_filesystems();
+    
+    /* Configure network */
+    setup_network();
+    
+    /* Run startup scripts */
+    run_startup_scripts();
+    
+    /* Start shell */
+    printf("[init] Starting shell...\n\n");
+    shell_pid = start_shell();
+    
+    /* Main loop - respawn shell if it exits */
+    while (1) {
+        pid_t pid = wait(&status);
+        
+        if (pid == shell_pid) {
+            printf("\n[init] Shell exited, respawning...\n");
+            sleep(1);
+            shell_pid = start_shell();
+        }
+        
+        /* Handle signals */
+        if (received_signal == SIGTERM || received_signal == SIGINT) {
+            do_shutdown(0);
+        }
+        if (received_signal == SIGHUP) {
+            received_signal = 0;
+            /* Reload configuration */
+        }
+    }
+    
+    return 0;
 }

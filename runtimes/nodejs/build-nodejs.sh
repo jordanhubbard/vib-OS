@@ -1,90 +1,96 @@
 #!/bin/bash
+# ============================================================================
+# vib-OS - Node.js 20 LTS Cross-Compilation Script
+# ============================================================================
+# Cross-compiles Node.js 20 for ARM64 vib-OS.
 #
-# UnixOS - Node.js 20 LTS Build Script
+# Prerequisites:
+# - LLVM/Clang toolchain
+# - ICU, OpenSSL, zlib built for target
 #
-# Downloads and builds Node.js 20 LTS for ARM64 UnixOS
-#
+# ============================================================================
 
 set -e
 
 NODE_VERSION="20.10.0"
-NODE_URL="https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}.tar.gz"
+NODE_URL="https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}.tar.xz"
+BUILD_DIR="$(pwd)/build"
+SYSROOT="$(pwd)/../sysroot"
+INSTALL_PREFIX="${SYSROOT}/usr"
 
-BUILD_DIR="$(pwd)/build/nodejs"
-SYSROOT="$(pwd)/build/sysroot"
-PREFIX="/usr"
+# Toolchain
+export CC="/opt/homebrew/opt/llvm/bin/clang"
+export CXX="/opt/homebrew/opt/llvm/bin/clang++"
+export AR="/opt/homebrew/opt/llvm/bin/llvm-ar"
+export LINK="${CXX}"
 
-echo "======================================="
-echo " Building Node.js v${NODE_VERSION}"
-echo "======================================="
-echo ""
+TARGET="aarch64-linux-musl"
+CFLAGS="-target ${TARGET} --sysroot=${SYSROOT} -O2 -fPIC"
+CXXFLAGS="${CFLAGS}"
+LDFLAGS="-target ${TARGET} --sysroot=${SYSROOT} -L${SYSROOT}/lib"
+
+export CFLAGS CXXFLAGS LDFLAGS
+
+echo "============================================"
+echo "vib-OS Node.js 20 LTS Cross-Compilation"
+echo "============================================"
+echo "Version: ${NODE_VERSION}"
+echo "Target: ${TARGET}"
+echo "Sysroot: ${SYSROOT}"
+echo "============================================"
 
 # Create directories
 mkdir -p "${BUILD_DIR}"
-mkdir -p "${SYSROOT}${PREFIX}"
+mkdir -p "${INSTALL_PREFIX}"
+
+cd "${BUILD_DIR}"
 
 # Download Node.js if not present
-if [ ! -f "${BUILD_DIR}/node-v${NODE_VERSION}.tar.gz" ]; then
-    echo "[DOWNLOAD] Node.js v${NODE_VERSION}"
-    cd "${BUILD_DIR}"
+if [ ! -f "node-v${NODE_VERSION}.tar.xz" ]; then
+    echo "[DOWNLOAD] Downloading Node.js ${NODE_VERSION}..."
     curl -LO "${NODE_URL}"
 fi
 
-# Extract if needed
-if [ ! -d "${BUILD_DIR}/node-v${NODE_VERSION}" ]; then
-    echo "[EXTRACT] Node.js source"
-    cd "${BUILD_DIR}"
-    tar xf "node-v${NODE_VERSION}.tar.gz"
+# Extract
+if [ ! -d "node-v${NODE_VERSION}" ]; then
+    echo "[EXTRACT] Extracting Node.js..."
+    tar xJf "node-v${NODE_VERSION}.tar.xz"
 fi
 
-cd "${BUILD_DIR}/node-v${NODE_VERSION}"
+cd "node-v${NODE_VERSION}"
 
-echo "[CONFIGURE] Node.js"
+echo "[CONFIGURE] Configuring Node.js..."
 
-# Note: This is a simplified script. Real cross-compilation requires:
-# 1. Cross-compile libuv for target
-# 2. Cross-compile V8 for ARM64
-# 3. Configure Node.js with proper sysroot
+# Configure for cross-compilation
+./configure \
+    --prefix="${INSTALL_PREFIX}" \
+    --dest-cpu=arm64 \
+    --dest-os=linux \
+    --cross-compiling \
+    --with-arm-float-abi=hard \
+    --with-intl=small-icu \
+    --without-npm \
+    --partly-static \
+    --shared-openssl \
+    --shared-openssl-includes="${SYSROOT}/usr/include" \
+    --shared-openssl-libpath="${SYSROOT}/usr/lib" \
+    --shared-zlib \
+    --shared-zlib-includes="${SYSROOT}/usr/include" \
+    --shared-zlib-libpath="${SYSROOT}/usr/lib"
 
-cat << 'EOF'
+echo "[BUILD] Building Node.js (this will take a while)..."
+make -j$(sysctl -n hw.ncpu)
 
-=== Cross-Compilation Notes ===
-
-For actual cross-compilation of Node.js to UnixOS:
-
-1. Build dependencies:
-   - libuv (async I/O library)
-   - V8 JavaScript engine (for ARM64)
-   - ICU (internationalization)
-   - OpenSSL
-   - zlib
-
-2. Configure Node.js:
-   ./configure \
-       --dest-cpu=arm64 \
-       --dest-os=linux \
-       --cross-compiling \
-       --prefix=/usr \
-       --without-npm \
-       --with-intl=none \
-       --shared
-
-3. Build:
-   CC_target=aarch64-linux-musl-gcc \
-   CXX_target=aarch64-linux-musl-g++ \
-   make -j$(nproc)
-
-4. Install to sysroot:
-   make DESTDIR=${SYSROOT} install
-
-Required for UnixOS:
-- libuv port (depends on our kernel)
-- V8 ARM64 support (upstream)
-- File system compatibility
-- Network stack (TCP/UDP)
-
-EOF
+echo "[INSTALL] Installing Node.js..."
+make install DESTDIR="${SYSROOT}"
 
 echo ""
-echo "[INFO] Node.js scaffold created"
-echo "[INFO] Full build requires complete network stack"
+echo "============================================"
+echo "Node.js 20 Build Complete!"
+echo "============================================"
+echo ""
+echo "Node.js installed to: ${INSTALL_PREFIX}"
+echo ""
+echo "Test with:"
+echo "  ${INSTALL_PREFIX}/bin/node --version"
+echo ""
