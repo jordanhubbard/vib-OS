@@ -1,2 +1,4 @@
 test/
 build/
+image/
+.DS_Store

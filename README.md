@@ -21,144 +21,161 @@ Vib-OS v0.5.0 - ARM64 with Full GUI
 
 ## Overview
 
-Vib-OS is a from-scratch,  Unix-like operating system for ARM64. Built with **18,000+ lines** of C and Assembly:
+Vib-OS is a from-scratch, Unix-like operating system for ARM64 architectures. It features a custom kernel, a modern macOS-inspired graphical user interface, a full TCP/IP networking stack, and a Virtual File System (VFS). Built with **18,000+ lines** of C and Assembly, it runs natively on QEMU, Apple Silicon (via UTM), and Raspberry Pi 4/5.
 
-- ✅ **macOS-style GUI** - Window manager with traffic light buttons, dock, menu bar
-- ✅ **Double-Buffered Compositor** - Flicker-free rendering
-- ✅ **Virtio Input** - Mouse (tablet) and keyboard support
-- ✅ **Applications** - Terminal, Calculator, File Manager, Notepad
-- ✅ **Full TCP/IP Stack** - Ethernet, ARP, IP, TCP, UDP, DNS
-- ✅ **Apple Silicon + Raspberry Pi** - M1/M2/M3 and Pi 4/5
+## 📸 Screenshots
 
-## Quick Start
+### Desktop & File Manager
+![File Manager](screenshots/filemanager.png)
+*Modern file manager with icon grid, navigation, file creation (New File/Folder), and renaming capabilities.*
 
-### Build & Run with GUI
+### Terminal & Shell
+![Terminal](screenshots/terminal.png)
+*VT100-compatible terminal with command history, `ls`, `cd`, and shell utilities.*
 
+### Applications (Snake Game)
+![Snake](screenshots/snake.png)
+*Interactive Snake game with score tracking and keyboard controls.*
+
+### Doom
+![Doom](screenshots/doom.png)
+*Doom running natively on Vib-OS.*
+
+## 🏗 Architecture
+
+```mermaid
+graph TD
+    subgraph Userspace ["Userspace (EL0)"]
+        GUI[Window Manager & GUI Apps]
+        Shell[Terminal / Shell]
+        Doom[Doom Engine]
+    end
+
+    subgraph Kernel ["Kernel (EL1)"]
+        Syscall[Syscall Interface (SVC)]
+        
+        subgraph Subsystems
+            VFS[Virtual File System]
+            Process[Process Scheduler]
+            Net[TCP/IP Networking Stack]
+            Mem[Memory Manager (PMM/VMM)]
+        end
+        
+        subgraph Drivers
+            VirtioNet[Virtio Net]
+            VirtioInput[Virtio Input (Tablet/Kbd)]
+            GIC[GICv3 Interrupts]
+            PL031[PL031 RTC]
+            PL011[PL011 UART]
+            HDA[Intel HDA Audio]
+        end
+    end
+
+    GUI --> Syscall
+    Shell --> Syscall
+    Doom --> Syscall
+    
+    Syscall --> VFS
+    Syscall --> Process
+    Syscall --> Net
+    
+    VFS --> RamFS
+    Net --> VirtioNet
+    Process --> Mem
+    
+    Drivers --> Hardware
+```
+
+## ✨ Features
+
+### 🖥 Graphical User Interface
+- **Window Manager**: Draggable windows with focus management and z-ordering.
+- **Traffic Light Controls**: Close, Minimize, and Maximize buttons.
+- **Taskbar & Dock**: Animated dock with hover labels; top menu bar with clock and WiFi status.
+- **Compositor**: Double-buffered rendering engine for flicker-free visuals.
+
+### 📂 File System (VFS)
+- **Virtual File System**: Unified interface for different filesystems.
+- **RamFS**: In-memory filesystem for temporary storage.
+- **Interactive File Manager**:
+  - Grid view for files and folders.
+  - **New!!** Rename support via GUI dialog.
+  - Create new files and folders.
+  - Notepad integration for editing text files.
+
+### 🌐 Networking
+- **Virtio-Net Driver**: High-performance network interface.
+- **TCP/IP Stack**: Custom implementation of Ethernet, ARP, IP, ICMP, UDP, and TCP.
+- **Host Passthrough**: Full internet access via QEMU user networking.
+- **WiFi Status**: Visual indicator in the menu bar.
+
+### 🛠 Core System
+- **Kernel**: Preemptive multitasking scheduler, 4-level paging (MMU).
+- **Drivers**: GICv3 Interrupt Controller, PL031 RTC (Real Time Clock), PL011 UART.
+- **Input**: Absolute mouse positioning (Virtio Tablet) and full keyboard support.
+
+### 📦 Applications
+- **Terminal**: `ls`, `cd`, `help`, `clear`, environment variables.
+- **Notepad**: Text editor with save/load functionality backed by VFS.
+- **Snake**: Classic game with graphics and score.
+- **Calculator**: Basic arithmetic operations.
+- **Doom**: Ported and running with graphics support.
+
+## 🚧 Pending Tasks & Known Issues
+
+Although significant progress has been made, the following features are currently in development or partially implemented:
+1.  **Sound Support**: Intel HDA driver is initialized, but audio playback is currently unstable or not working correctly in all apps.
+2.  **Network Settings UI**: The settings window for configuring static IPs or WiFi credentials is not yet fully implemented.
+3.  **Full Web Browser**: The browser application handles basic rendering but lacks a full HTML parser and real HTTP request engine (currently stubbed).
+
+## 🗺 Roadmap
+
+- [ ] **Hard Disk Storage**: Currently, the system uses **RAM-only storage** (RamFS). All data is lost on reboot. Implementing a persistent hard disk driver (EXT4/FAT32) is a high-priority todo.
+- [ ] **browser Engine**: Implement a basic HTML tokeniser and renderer.
+- [ ] **Audio**: Fix buffer management for Intel HDA to enable smooth PCM playback.
+- [ ] **Multi-threading**: Enhanced user-space threading support.
+- [ ] **User Accounts**: Basic login screen and multi-user support.
+
+## 🚀 Quick Start
+
+### Build & Run
 ```bash
+# Clone the repository
 git clone git@github.com:viralcode/vib-OS.git
 cd vib-OS
 
-make kernel
-make run-gui    # Launch with GUI display
+# Build Kernel & Userspace
+make all
+
+# Run with GUI (QEMU)
+make run-gui
 ```
 
-### Run in QEMU (Terminal Only)
-
+### Build Bootable Image (USB)
 ```bash
-make run        # Text mode
+make image          # Creates unixos.img (EFI bootable)
 ```
-
-## Screenshot
-
-The OS features a modern macOS-inspired desktop with:
-- **Menu Bar** - Vib-OS branding, File/Edit/View/Help menus, clock
-- **Dock** - Quick launch: Terminal, Files, Calculator, Notepad, Help
-- **Windows** - Draggable with traffic light buttons (close/minimize/maximize)
-- **Double Buffering** - Smooth, tear-free rendering
-
-## Features
-
-### GUI System
-| Component | Status |
-|-----------|--------|
-| Window Manager | ✅ Draggable windows, focus, z-order |
-| Traffic Light Buttons | ✅ Close (×), Minimize (−), Maximize (+) |
-| Menu Bar | ✅ Click to open apps |
-| Dock | ✅ 5 app launchers with icons |
-| Compositor | ✅ Double-buffered, optimized |
-
-### Applications
-| App | Features |
-|-----|----------|
-| **Terminal** | VT100 emulation, command prompt, app launcher |
-| **Calculator** | Full arithmetic (+−×÷), chained operations |
-| **Files** | Directory browser |
-| **Notepad** | Text editor with keyboard input |
-| **Help** | Usage instructions |
-
-### Terminal Apps (via KAPI)
-| App | Description |
-|-----|-------------|
-| `test` | Basic test - draws red rectangle |
-| `clock` | Graphical clock with uptime display |
-| `snake` | Snake game - mouse controlled! |
-| `sysmon` | System monitor with CPU/memory bars |
-| `mandelbrot` | Fractal renderer demo |
-
-
-### Input Drivers
-| Device | Status |
-|--------|--------|
-| Virtio Tablet (mouse) | ✅ Absolute positioning |
-| Virtio Keyboard | ✅ Scancode to ASCII |
-| UART | ✅ Serial console input |
-
-### Kernel
-| Component | Status |
-|-----------|--------|
-| MMU (4-level pages) | ✅ |
-| GIC v3 Interrupts | ✅ |
-| Buddy Allocator PMM | ✅ |
-| Kernel Heap (kmalloc) | ✅ 8MB heap |
-| Scheduler | ✅ |
-
-### Filesystems
-| FS | Status |
-|----|--------|
-| VFS + ramfs | ✅ |
-| ext4 | ✅ |
-| APFS (read-only) | ✅ |
-
-### Networking
-| Layer | Status |
-|-------|--------|
-| Ethernet/ARP/IP/ICMP | ✅ |
-| UDP/TCP | ✅ |
-| DNS resolver | ✅ |
-
-## Project Structure
-
-```
-vib-OS/
-├── kernel/
-│   ├── core/          # Main, panic, init
-│   ├── gui/           # Window manager, compositor
-│   │   ├── window.c   # Windows, dock, menu bar
-│   │   ├── terminal.c # VT100 terminal
-│   │   └── font.c     # 8x16 bitmap font
-│   ├── mm/            # Memory management
-│   └── net/           # TCP/IP stack
-├── drivers/
-│   ├── input/         # Virtio tablet & keyboard
-│   ├── gpu/           # Framebuffer, ramfb
-│   └── platform/      # RPi, Apple Silicon
-├── userspace/         # Init, shell
-└── scripts/           # Build utilities
-```
-
-## Build Commands
-
+*To write to a USB drive (replace `diskX` with your drive):*
 ```bash
-make clean          # Clean build
-make kernel         # Build kernel only
-make all            # Build everything
-make run            # Run text mode
-make run-gui        # Run with GUI display
+sudo dd if=image/unixos.img of=/dev/diskX bs=4m status=progress
 ```
 
-## Platforms
+### Run in Text Mode
+```bash
+make run
+```
 
-| Platform | Status |
-|----------|--------|
-| QEMU ARM64 | ✅ Primary target |
-| UTM (macOS) | ✅ Apple Silicon |
-| Apple M1/M2/M3 | ✅ |
-| Raspberry Pi 4/5 | ✅ |
+## 🤝 Contributing
 
-## License
+This project is open source and we welcome contributions!
 
-MIT License
+1.  **Fork** the repository.
+2.  Create a **Feature Branch** (`git checkout -b feature/NewFeature`).
+3.  **Commit** your changes (`git commit -m 'Add NewFeature'`).
+4.  **Push** to the branch (`git push origin feature/NewFeature`).
+5.  Open a **Pull Request**.
 
----
-
-**Vib-OS** - Built with ❤️ for ARM64
+### Coding Standards
+- Use **C11** standard.
+- Follow the kernel coding style (4-space indentation).
+- Ensure new features work on QEMU ARM64.

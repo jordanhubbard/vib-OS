@@ -182,7 +182,8 @@ int vmm_init(void)
         (3UL << 12) |       /* SH0: Inner Shareable */
         (1UL << 24) |       /* IRGN1: Inner Write-back */
         (1UL << 26) |       /* ORGN1: Outer Write-back */
-        (3UL << 28);        /* SH1: Inner Shareable */
+        (3UL << 28) |       /* SH1: Inner Shareable */
+        (5UL << 32);        /* IPS: 48-bit Output Address */
     
     asm volatile("msr tcr_el1, %0" : : "r" (tcr));
     
@@ -200,15 +201,21 @@ int vmm_init(void)
     }
     kernel_pgd[idx0] = phys_to_pte((phys_addr_t)l1_table, PTE_VALID | PTE_TABLE);
     
-    /* Map 0x00000000-0x3FFFFFFF as normal memory (1GB block) */
+    /* Map 0x00000000-0x3FFFFFFF (first 1GB - MMIO) as DEVICE memory */
     l1_table[0] = (0x00000000UL & PTE_ADDR_MASK) | 
-                  PTE_VALID | PTE_BLOCK | PTE_ATTR_NORMAL | PTE_SH_INNER | PTE_ACCESSED;
+                  PTE_VALID | PTE_BLOCK | PTE_ATTR_DEVICE | PTE_SH_NONE | PTE_ACCESSED;
     
     /* Map 0x40000000-0x7FFFFFFF as normal memory (kernel load area) */
     l1_table[1] = (0x40000000UL & PTE_ADDR_MASK) | 
                   PTE_VALID | PTE_BLOCK | PTE_ATTR_NORMAL | PTE_SH_INNER | PTE_ACCESSED;
     
-    printk("VMM: RAM identity mapped (0-2GB)\n");
+    /* Map High PCI ECAM region (0x40_0000_0000) for 1GB (covers 0x40_1000_0000) */
+    /* L1 index 256 (256GB) maps 0x40_0000_0000 - 0x40_3FFF_FFFF */
+    /* Map as DEVICE memory (nGnRnE) */
+    l1_table[256] = (0x4000000000ULL & PTE_ADDR_MASK) | 
+                    PTE_VALID | PTE_BLOCK | PTE_ATTR_DEVICE | PTE_SH_NONE | PTE_ACCESSED;
+    
+    printk("VMM: RAM identity mapped (0-2GB) + High PCI ECAM (256GB base)\n");
     
     /* Map device region 0x08000000-0x10000000 for GIC, UART etc */
     /* This is at L1 index 0, but we need L2 tables for finer control */

@@ -24,7 +24,9 @@ SYSROOT = ../build/sysroot
 C_SOURCES = src/syscall.c \
             src/string.c \
             src/stdlib.c \
-            src/stdio.c
+            src/stdio.c \
+            src/signal.c \
+            src/errno.c
 
 ASM_SOURCES = crt/crt0.S
 
@@ -61,9 +63,9 @@ $(LIBC): $(C_OBJECTS)
 	@$(AR) rcs $@ $^
 	@$(RANLIB) $@
 
-$(CRT0): $(ASM_OBJECTS)
+$(CRT0): crt/crt0.S | $(BUILD_DIR)
 	@echo "[CRT] $@"
-	@cp $(BUILD_DIR)/crt0.o $@
+	@$(AS) $(ASFLAGS) -c $< -o $@
 
 install: $(LIBC) $(CRT0)
 	@echo "[INSTALL] Installing to sysroot"

@@ -80,8 +80,9 @@ static void timer_irq_handler(uint32_t irq, void *data)
     /* Set up next timer interrupt */
     write_cntv_tval(timer_frequency / HZ);
     
-    /* Invoke scheduler if needed */
-    /* schedule(); */  /* Don't preempt for now */
+    /* Invoke scheduler for preemptive multitasking */
+    extern void process_schedule_from_irq(void);
+    process_schedule_from_irq();
 }
 
 /* ===================================================================== */
@@ -126,10 +127,11 @@ void timer_init(void)
     
     printk("TIMER: TVAL set\n");
     
-    /* Don't enable timer yet - do this after init is complete */
-    /* write_cntv_ctl(TIMER_CTL_ENABLE); */
+    /* Enable timer and IRQ now */
+    write_cntv_ctl(TIMER_CTL_ENABLE);
+    gic_enable_irq(TIMER_IRQ_VIRT);
     
-    printk(KERN_INFO "TIMER: Initialized (IRQ will be enabled later)\n");
+    printk(KERN_INFO "TIMER: Initialized and IRQ enabled\n");
 }
 
 uint64_t timer_get_frequency(void)

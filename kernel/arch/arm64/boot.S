@@ -300,7 +300,26 @@ sync_exception_lower:
     add     sp, sp, #272
     eret
 
+/* IRQ Handler with Preemptive Multitasking Support (ported from VibeOS) */
+/* Offset of cpu_context_t within process_t - must match process.c! */
+#define CONTEXT_OFFSET 0x50
+
+.global current_process
+.global kernel_context
+
 irq_handler:
+    /* Save x0, x1 temporarily to stack */
+    stp     x0, x1, [sp, #-16]!
+
+    /* Check if a process is running (current_process != NULL) */
+    adrp    x0, current_process
+    ldr     x0, [x0, :lo12:current_process]
+    cbnz    x0, .Lprocess_irq
+
+    /* ========== KERNEL PATH ========== */
+    /* Restore x0, x1 and use simple stack save */
+    ldp     x0, x1, [sp], #16
+    
     sub     sp, sp, #272
     stp     x0, x1, [sp, #0]
     stp     x2, x3, [sp, #16]
@@ -325,6 +344,65 @@ irq_handler:
     mov     x0, sp
     bl      handle_irq
     
+    /* Check if a process should now run */
+    dsb     sy
+    adrp    x0, current_process
+    ldr     x0, [x0, :lo12:current_process]
+    cbz     x0, .Lkernel_return
+
+    /* Process should run! Save kernel context and switch */
+    adrp    x1, kernel_context
+    add     x1, x1, :lo12:kernel_context
+    
+    /* Copy saved regs from stack to kernel_context */
+    mov     x2, sp
+    ldp     x3, x4, [x2, #0]
+    stp     x3, x4, [x1, #0x00]
+    ldp     x3, x4, [x2, #16]
+    stp     x3, x4, [x1, #0x10]
+    ldp     x3, x4, [x2, #32]
+    stp     x3, x4, [x1, #0x20]
+    ldp     x3, x4, [x2, #48]
+    stp     x3, x4, [x1, #0x30]
+    ldp     x3, x4, [x2, #64]
+    stp     x3, x4, [x1, #0x40]
+    ldp     x3, x4, [x2, #80]
+    stp     x3, x4, [x1, #0x50]
+    ldp     x3, x4, [x2, #96]
+    stp     x3, x4, [x1, #0x60]
+    ldp     x3, x4, [x2, #112]
+    stp     x3, x4, [x1, #0x70]
+    ldp     x3, x4, [x2, #128]
+    stp     x3, x4, [x1, #0x80]
+    ldp     x3, x4, [x2, #144]
+    stp     x3, x4, [x1, #0x90]
+    ldp     x3, x4, [x2, #160]
+    stp     x3, x4, [x1, #0xa0]
+    ldp     x3, x4, [x2, #176]
+    stp     x3, x4, [x1, #0xb0]
+    ldp     x3, x4, [x2, #192]
+    stp     x3, x4, [x1, #0xc0]
+    ldp     x3, x4, [x2, #208]
+    stp     x3, x4, [x1, #0xd0]
+    ldp     x3, x4, [x2, #224]
+    stp     x3, x4, [x1, #0xe0]
+    ldr     x3, [x2, #240]
+    str     x3, [x1, #0xf0]
+    ldp     x3, x4, [x2, #240]
+    ldr     x4, [x2, #256]
+    str     x3, [x1, #0x100]  /* pc from elr_el1 */
+    str     x4, [x1, #0x108]  /* pstate from spsr_el1 */
+    
+    /* Save sp */
+    add     x3, sp, #272
+    str     x3, [x1, #0xf8]
+    
+    /* Switch to process: get context pointer */
+    add     x0, x0, #CONTEXT_OFFSET
+    add     sp, sp, #272
+    b       .Lrestore_process
+
+.Lkernel_return:
     ldp     x30, x0, [sp, #240]
     msr     elr_el1, x0
     ldr     x0, [sp, #256]
@@ -346,6 +424,89 @@ irq_handler:
     ldp     x28, x29, [sp, #224]
     add     sp, sp, #272
     eret
+
+.Lprocess_irq:
+    /* ========== PROCESS PATH ========== */
+    /* x0 = current_process, original x0/x1 on stack */
+    add     x0, x0, #CONTEXT_OFFSET
+    
+    /* Save x2-x30 (still intact) */
+    stp     x2,  x3,  [x0, #0x10]
+    stp     x4,  x5,  [x0, #0x20]
+    stp     x6,  x7,  [x0, #0x30]
+    stp     x8,  x9,  [x0, #0x40]
+    stp     x10, x11, [x0, #0x50]
+    stp     x12, x13, [x0, #0x60]
+    stp     x14, x15, [x0, #0x70]
+    stp     x16, x17, [x0, #0x80]
+    stp     x18, x19, [x0, #0x90]
+    stp     x20, x21, [x0, #0xa0]
+    stp     x22, x23, [x0, #0xb0]
+    stp     x24, x25, [x0, #0xc0]
+    stp     x26, x27, [x0, #0xd0]
+    stp     x28, x29, [x0, #0xe0]
+    str     x30, [x0, #0xf0]
+    
+    /* Pop original x0, x1 from stack and save */
+    ldp     x2, x3, [sp], #16
+    stp     x2, x3, [x0, #0x00]
+    
+    /* Save sp, elr, spsr */
+    mov     x1, sp
+    str     x1, [x0, #0xf8]
+    mrs     x1, elr_el1
+    str     x1, [x0, #0x100]
+    mrs     x1, spsr_el1
+    str     x1, [x0, #0x108]
+    
+    /* Call IRQ handler (may change current_process) */
+    bl      handle_irq
+    
+    dsb     sy
+    isb
+    
+    /* Load (possibly new) current_process */
+    adrp    x0, current_process
+    ldr     x0, [x0, :lo12:current_process]
+    cbz     x0, .Lprocess_irq_error
+    
+    add     x0, x0, #CONTEXT_OFFSET
+
+.Lrestore_process:
+    /* Restore elr, spsr */
+    ldr     x1, [x0, #0x100]
+    msr     elr_el1, x1
+    ldr     x1, [x0, #0x108]
+    msr     spsr_el1, x1
+    
+    /* Restore sp */
+    ldr     x1, [x0, #0xf8]
+    mov     sp, x1
+    
+    /* Restore x2-x30 */
+    ldp     x2,  x3,  [x0, #0x10]
+    ldp     x4,  x5,  [x0, #0x20]
+    ldp     x6,  x7,  [x0, #0x30]
+    ldp     x8,  x9,  [x0, #0x40]
+    ldp     x10, x11, [x0, #0x50]
+    ldp     x12, x13, [x0, #0x60]
+    ldp     x14, x15, [x0, #0x70]
+    ldp     x16, x17, [x0, #0x80]
+    ldp     x18, x19, [x0, #0x90]
+    ldp     x20, x21, [x0, #0xa0]
+    ldp     x22, x23, [x0, #0xb0]
+    ldp     x24, x25, [x0, #0xc0]
+    ldp     x26, x27, [x0, #0xd0]
+    ldp     x28, x29, [x0, #0xe0]
+    ldr     x30, [x0, #0xf0]
+    
+    /* Restore x0, x1 last */
+    ldp     x0, x1, [x0, #0x00]
+    
+    eret
+
+.Lprocess_irq_error:
+    b       .Lprocess_irq_error
 
 fiq_handler:
     b       fiq_handler         /* FIQ not used, spin */

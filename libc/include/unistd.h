@@ -65,4 +65,32 @@ int usleep(unsigned int usec);
 #define SEEK_CUR    1
 #define SEEK_END    2
 
+/* ===================================================================== */
+/* Access mode flags */
+/* ===================================================================== */
+
+#define F_OK    0   /* Test for existence */
+#define X_OK    1   /* Test for execute permission */
+#define W_OK    2   /* Test for write permission */
+#define R_OK    4   /* Test for read permission */
+
+/* ===================================================================== */
+/* Additional system calls */
+/* ===================================================================== */
+
+int access(const char *path, int mode);
+int sethostname(const char *name, size_t len);
+pid_t setsid(void);
+void sync(void);
+int fsync(int fd);
+int unlink(const char *path);
+int rmdir(const char *path);
+int link(const char *oldpath, const char *newpath);
+int symlink(const char *target, const char *linkpath);
+ssize_t readlink(const char *path, char *buf, size_t bufsiz);
+int isatty(int fd);
+int brk(void *addr);
+void *sbrk(long increment);
+long sysconf(int name);
+
 #endif /* _LIBC_UNISTD_H */

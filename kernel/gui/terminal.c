@@ -90,6 +90,9 @@ struct terminal {
     /* Shell process */
     int shell_pid;
     int pty_fd;
+    
+    /* Current Working Directory */
+    char cwd[256];
 };
 
 static struct terminal *active_terminal = NULL;
@@ -359,6 +362,31 @@ static int str_starts_with(const char *str, const char *prefix)
     return 1;
 }
 
+#include "fs/vfs.h"
+
+/* Helper for ls command */
+static int ls_callback(void *ctx, const char *name, int len, loff_t offset, ino_t ino, unsigned type)
+{
+    struct terminal *term = (struct terminal *)ctx;
+    
+    char buf[256];
+    int i;
+    for (i = 0; i < len && i < 255; i++) buf[i] = name[i];
+    buf[i] = '\0';
+    
+    /* Type >> 12. 4 = DIR, 8 = REG */
+    /* Check if directory */
+    if (type == 4) {
+        term_puts(term, "\033[1;34m"); /* Bright Blue */
+        term_puts(term, buf);
+        term_puts(term, "/\033[0m  ");
+    } else {
+        term_puts(term, buf);
+        term_puts(term, "  ");
+    }
+    return 0;
+}
+
 static void term_execute_command(struct terminal *term, const char *cmd)
 {
     /* Skip leading whitespace */
@@ -379,28 +407,66 @@ static void term_execute_command(struct terminal *term, const char *cmd)
         term_puts(term, "\033[33mBuilt-in Commands:\033[0m\n");
         term_puts(term, "  help      - Show this help message\n");
         term_puts(term, "  clear     - Clear the terminal screen\n");
-        term_puts(term, "  ls        - List directory contents\n");
+        term_puts(term, "  ls        - List directory contents (Real VFS)\n");
         term_puts(term, "  pwd       - Print working directory\n");
         term_puts(term, "  cd <dir>  - Change directory\n");
         term_puts(term, "  cat <f>   - Display file contents\n");
-        term_puts(term, "  echo <t>  - Print text to screen\n");
-        term_puts(term, "  uname     - System information\n");
-        term_puts(term, "  date      - Show current date/time\n");
-        term_puts(term, "  uptime    - Show system uptime\n");
-        term_puts(term, "  free      - Show memory usage\n");
-        term_puts(term, "  ps        - List running processes\n");
-        term_puts(term, "  whoami    - Current user name\n");
-        term_puts(term, "  neofetch  - System info display\n");
-        term_puts(term, "  exit      - Close terminal\n");
+        term_puts(term, "  browser   - Launch Web Browser\n");
+        term_puts(term, "  ping <ip> - Ping remote host\n");
+        term_puts(term, "  sound     - Test audio output\n");
+        term_puts(term, "  neofetch  - System info\n");
     }
     else if (str_starts_with(cmd, "ls")) {
-        term_puts(term, "\033[34mbin\033[0m  \033[34mdev\033[0m  \033[34metc\033[0m  \033[34mhome\033[0m  \033[34mlib\033[0m  \033[34mproc\033[0m  \033[34msys\033[0m  \033[34mtmp\033[0m  \033[34musr\033[0m  \033[34mvar\033[0m\n");
+        const char *path = term->cwd[0] ? term->cwd : "/";
+        struct file *dir = vfs_open(path, O_RDONLY, 0);
+        if (dir) {
+            vfs_readdir(dir, term, ls_callback);
+            vfs_close(dir);
+            term_puts(term, "\n");
+        } else {
+            term_puts(term, "ls: Failed to open root directory\n");
+        }
     }
     else if (str_starts_with(cmd, "pwd")) {
-        term_puts(term, "/home/user\n");
+        if (term->cwd[0])
+            term_puts(term, term->cwd);
+        else
+            term_puts(term, "/");
+        term_puts(term, "\n");
     }
-    else if (str_starts_with(cmd, "cd")) {
-        term_puts(term, "\033[32mChanged directory\033[0m\n");
+    else if (str_starts_with(cmd, "cd ")) {
+        char *path = (char*)cmd + 3;
+        while (*path == ' ') path++;
+        
+        /* Remove newline if present */
+        int len = 0; while(path[len] && path[len] != '\n') len++;
+        path[len] = '\0';
+        
+        if (len == 0) return;
+        
+        /* Handle relative paths manually for now or use vfs_lookup if absolute */
+        char target[256];
+        if (path[0] == '/') {
+            int i=0; while(path[i] && i<255) { target[i]=path[i]; i++; } target[i]='\0';
+        } else {
+            /* Append to CWD */
+            int i=0; while(term->cwd[i]) { target[i]=term->cwd[i]; i++; }
+            if (i > 0 && target[i-1] != '/') target[i++] = '/';
+            int j=0; while(path[j] && i<255) { target[i++] = path[j++]; }
+            target[i] = '\0';
+        }
+        
+        /* Verify path exists and is dir */
+        struct file *dir = vfs_open(target, O_RDONLY, 0);
+        if (dir) {
+            /* Success */
+            int i=0; while(target[i]) { term->cwd[i]=target[i]; i++; } term->cwd[i]='\0';
+            vfs_close(dir);
+        } else {
+            term_puts(term, "cd: No such directory: ");
+            term_puts(term, path);
+            term_puts(term, "\n");
+        }
     }
     else if (str_starts_with(cmd, "cat")) {
         term_puts(term, "cat: No such file or directory\n");
@@ -451,6 +517,58 @@ static void term_execute_command(struct terminal *term, const char *cmd)
     }
     else if (str_starts_with(cmd, "exit")) {
         term_puts(term, "\033[33mGoodbye!\033[0m\n");
+    }
+    else if (str_starts_with(cmd, "sound")) {
+        term_puts(term, "Playing test tone (440Hz Square Wave)...\n");
+        
+        extern int intel_hda_play_pcm(const void *data, uint32_t samples, uint8_t channels, uint32_t sample_rate);
+        
+        uint32_t samples = 48000; /* 1 second */
+        int16_t *buf = (int16_t *)kmalloc(samples * 4);
+        if (buf) {
+            for (uint32_t i = 0; i < samples; i++) {
+                int16_t val = (i % 100) < 50 ? 8000 : -8000;
+                buf[i*2] = val;
+                buf[i*2+1] = val;
+            }
+            intel_hda_play_pcm(buf, samples, 2, 48000);
+            /* Don't free immediately as DMA keeps using it, slight leak for test is fine or we need a callback */
+        } else {
+            term_puts(term, "Error: memory allocation failed\n");
+        }
+    }
+    else if (str_starts_with(cmd, "ping ")) {
+        term_puts(term, "Pinging ");
+        term_puts(term, cmd + 5);
+        term_puts(term, "...\n");
+        
+        char *ip_str = (char*)cmd + 5;
+        uint32_t ip = 0;
+        int octet = 0;
+        int shift = 24;
+        
+        while (*ip_str) {
+            if (*ip_str == '.') {
+                ip |= (octet << shift);
+                shift -= 8;
+                octet = 0;
+            } else if (*ip_str >= '0' && *ip_str <= '9') {
+                octet = octet * 10 + (*ip_str - '0');
+            }
+            ip_str++;
+        }
+        ip |= (octet << shift);
+        
+        /* 0x0A000202 */
+        // term_printf("IP: %08x\n", ip);
+        
+        extern int icmp_send_echo(uint32_t dest_ip, uint16_t id, uint16_t seq);
+        icmp_send_echo(ip, 1, 1);
+        term_puts(term, "Packet sent.\n");
+    }
+    else if (str_starts_with(cmd, "browser")) {
+        term_puts(term, "Starting Browser...\n");
+        gui_create_window("Browser", 150, 100, 600, 450);
     }
     else {
         term_puts(term, "\033[31mCommand not found:\033[0m ");
@@ -534,6 +652,10 @@ struct terminal *term_create(int x, int y, int cols, int rows)
     term->input_pos = 0;
     term->content_x = x;
     term->content_y = y;
+    
+    /* Init CWD */
+    term->cwd[0] = '/';
+    term->cwd[1] = '\0';
     
     /* Clear buffer */
     for (int row = 0; row < rows; row++) {

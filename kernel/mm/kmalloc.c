@@ -13,9 +13,9 @@
 /* Configuration */
 /* ===================================================================== */
 
-#define HEAP_SIZE           (8 * 1024 * 1024)   /* 8MB kernel heap */
+#define HEAP_SIZE           (32 * 1024 * 1024)  /* 32MB kernel heap - DOOM needs 5MB+ */
 #define MIN_ALLOC           32                   /* Minimum allocation size */
-#define MAX_ALLOC           (1024 * 1024)        /* Maximum single allocation (1MB) */
+#define MAX_ALLOC           (16 * 1024 * 1024)   /* Maximum single allocation (16MB for DOOM zone) */
 
 /* Fixed heap location - after kernel at 0x42000000 */
 /* Kernel loads at 0x40200000, so 0x42000000 gives 30MB for kernel code/data */

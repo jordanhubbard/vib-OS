@@ -1,0 +1,1 @@
+Sound debugged. Codec config added. KAPI wired. Makefile fixed.

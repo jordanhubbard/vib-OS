@@ -281,4 +281,36 @@ uint16_t ntohs(uint16_t netshort);
 uint32_t htonl(uint32_t hostlong);
 uint32_t ntohl(uint32_t netlong);
 
+/* ===================================================================== */
+/* Network Interface */
+/* ===================================================================== */
+
+struct net_interface {
+    char name[16];
+    uint8_t mac[ETH_ALEN];
+    uint32_t ip;
+    uint32_t netmask;
+    uint32_t gateway;
+    bool up;
+    uint64_t rx_packets;
+    uint64_t tx_packets;
+    uint64_t rx_bytes;
+    uint64_t tx_bytes;
+    
+    /* Driver Send Function */
+    int (*send)(struct net_interface *iface, const void *data, size_t len);
+    void *priv; /* Driver private data */
+};
+
+/**
+ * net_add_interface - Register a network interface
+ */
+struct net_interface *net_add_interface(const char *name, uint8_t *mac, uint32_t ip, 
+                      uint32_t netmask, uint32_t gateway);
+
+/**
+ * net_rx - Receive a packet from a driver
+ */
+void net_rx(struct net_interface *iface, const void *data, size_t len);
+
 #endif /* _NET_NET_H */

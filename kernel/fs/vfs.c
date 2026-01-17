@@ -103,149 +103,353 @@ int register_filesystem(struct file_system_type *fs)
 /* File operations */
 /* ===================================================================== */
 
+#include "mm/kmalloc.h"
+
+/* ===================================================================== */
+/* Path lookup */
+/* ===================================================================== */
+
+static struct dentry *vfs_lookup_path(const char *path, const char **filename)
+{
+    if (!root_dentry) return NULL;
+    
+    struct dentry *curr = root_dentry;
+    char *p = (char *)path;
+    
+    /* Skip leading / */
+    while (*p == '/') p++;
+    
+    if (*p == '\0') {
+        if (filename) *filename = NULL;
+        return curr;
+    }
+    
+    static char buf[NAME_MAX + 1];
+    
+    while (*p) {
+        /* Extract next component */
+        int len = 0;
+        char *start = p;
+        while (*p && *p != '/') {
+            if (len < NAME_MAX) buf[len++] = *p;
+            p++;
+        }
+        buf[len] = '\0';
+        
+        while (*p == '/') p++;
+        
+        /* If this is the last component, return parent and filename */
+        if (*p == '\0' && filename) {
+            *filename = start; /* Pointer into original string - careful */
+            /* Actually, we need to copy it because original might be const */
+            /* But caller usually passes non-const or we can just return curr */
+            /* Better design: return parent dentry and pointer to last component in path */
+            return curr; /* curr is the directory containing the file */
+            /* Wait, this logic is tricky. Let's do simple traversal */
+        }
+        
+        /* Lookup child */
+        if (!curr->d_inode || !curr->d_inode->i_op || !curr->d_inode->i_op->lookup) {
+            return NULL;
+        }
+        
+        struct dentry target;
+        for(int i=0; i<=len; i++) target.d_name[i] = buf[i];
+        
+        /* In this simplified VFS, lookup populates the dentry if found */
+        /* We need to allocate a real dentry to return/store */
+        /* For now, simplified: rely on ramfs creating the inode and we assume we traverse */
+        
+        /* Simple hack for ramfs traversal without full dcache: */
+        /* We construct a dummy dentry, pass to lookup. If lookup populates d_inode, we proceed. */
+        
+        /* Allocate a dentry to be safe/consistent */
+        struct dentry *child = kzalloc(sizeof(struct dentry), GFP_KERNEL);
+        if (!child) return NULL;
+        
+        for(int i=0; i<=len; i++) child->d_name[i] = buf[i];
+        child->d_parent = curr;
+        child->d_sb = curr->d_sb;
+        
+        if (curr->d_inode->i_op->lookup(curr->d_inode, child) != NULL) {
+            /* If it returns a dentry, use it */
+             /* (Not implemented in ramfs, it returns NULL on success with populated pointer) */
+        }
+        
+        if (!child->d_inode) {
+             /* Not found */
+             kfree(child);
+             return NULL;
+        }
+        
+        curr = child;
+    }
+    
+    if (filename) *filename = NULL;
+    return curr;
+}
+
+/* Helper to find parent and last component */
+static struct dentry *vfs_lookup_parent(const char *path, char *name_buf)
+{
+    if (!root_dentry) return NULL;
+    
+    struct dentry *curr = root_dentry;
+    char *p = (char *)path;
+    
+    /* Skip leading / */
+    while (*p == '/') p++;
+    
+    if (*p == '\0') return NULL; /* Root has no parent */
+    
+    static char buf[NAME_MAX + 1];
+    
+    while (*p) {
+        /* Extract next component */
+        int len = 0;
+        while (*p && *p != '/') {
+            if (len < NAME_MAX) buf[len++] = *p;
+            p++;
+        }
+        buf[len] = '\0';
+        
+        while (*p == '/') p++;
+        
+        if (*p == '\0') {
+             /* This was the last component */
+             if (name_buf) {
+                 for(int i=0; i<=len; i++) name_buf[i] = buf[i];
+             }
+             return curr;
+        }
+        
+        /* Traverse down */
+        if (!curr->d_inode || !curr->d_inode->i_op || !curr->d_inode->i_op->lookup) {
+            return NULL;
+        }
+        
+        struct dentry *child = kzalloc(sizeof(struct dentry), GFP_KERNEL);
+        if (!child) return NULL;
+        
+        for(int i=0; i<=len; i++) child->d_name[i] = buf[i];
+        
+        /* Assume success for now (lookup populates child->d_inode) */
+        curr->d_inode->i_op->lookup(curr->d_inode, child);
+        
+        if (!child->d_inode) {
+            kfree(child);
+            return NULL;
+        }
+        curr = child;
+    }
+    
+    return NULL;
+}
+
+/* Redefine vfs_open with lookup */
 struct file *vfs_open(const char *path, int flags, mode_t mode)
 {
-    (void)path;
-    (void)flags;
-    (void)mode;
+    /* Special case for root */
+    if (path[0] == '/' && path[1] == '\0') {
+         struct file *f = kzalloc(sizeof(struct file), GFP_KERNEL);
+         f->f_dentry = root_dentry;
+         f->f_op = root_dentry->d_inode->i_fop;
+         f->private_data = root_dentry->d_inode->i_private;
+         f->f_mode = mode;
+         f->f_flags = flags;
+         f->f_count.counter = 1;
+         return f;
+    }
     
-    /* TODO: Implement path lookup and file opening */
-    printk(KERN_DEBUG "VFS: open('%s', 0x%x, 0%o)\n", path, flags, mode);
+    char name[NAME_MAX + 1];
+    struct dentry *parent = vfs_lookup_parent(path, name);
     
-    return NULL;  /* Not implemented */
+    if (!parent) {
+        /* Try full lookup (might be exact match on an intermediate node? Unlikely for open) */
+        /* Or file exists in root */
+        if (root_dentry) parent = root_dentry;
+        
+        /* Extract name from /name */
+        const char *p = path;
+        while (*p == '/') p++;
+        int i = 0;
+        while (*p && *p != '/') {
+             if (i < NAME_MAX) name[i++] = *p;
+             p++;
+        }
+        name[i] = '\0';
+        if (*p != '\0') return NULL; /* Path had more components but parent lookup failed */
+    }
+    
+    /* Now look for the file in parent */
+    struct dentry *child = kzalloc(sizeof(struct dentry), GFP_KERNEL);
+    for(int i=0; i<NAME_MAX && name[i]; i++) child->d_name[i] = name[i];
+    
+    if (parent->d_inode && parent->d_inode->i_op && parent->d_inode->i_op->lookup) {
+        parent->d_inode->i_op->lookup(parent->d_inode, child);
+    }
+    
+    if (!child->d_inode) {
+        /* Check O_CREAT */
+        if (flags & O_CREAT) {
+            /* Create it */
+            if (parent->d_inode->i_op->create) {
+                int ret = parent->d_inode->i_op->create(parent->d_inode, child, mode);
+                if (ret != 0) {
+                    kfree(child);
+                    return NULL;
+                }
+            }
+        } else {
+            kfree(child);
+            return NULL;
+        }
+    }
+    
+    struct file *f = kzalloc(sizeof(struct file), GFP_KERNEL);
+    if (!f) return NULL;
+    
+    f->f_dentry = child;
+    f->f_op = child->d_inode->i_fop;
+    f->private_data = child->d_inode->i_private;
+    f->f_mode = mode;
+    f->f_flags = flags;
+    f->f_count.counter = 1;
+    
+    if (f->f_op && f->f_op->open) {
+        f->f_op->open(child->d_inode, f);
+    }
+    
+    return f;
+}
+
+int vfs_create(const char *path, mode_t mode)
+{
+    char name[NAME_MAX + 1];
+    struct dentry *parent = vfs_lookup_parent(path, name);
+    if (!parent) return -ENOENT;
+    
+    struct dentry *child = kzalloc(sizeof(struct dentry), GFP_KERNEL);
+    for(int i=0; i<NAME_MAX && name[i]; i++) child->d_name[i] = name[i];
+    
+    if (!parent->d_inode->i_op || !parent->d_inode->i_op->create) return -EPERM;
+    
+    return parent->d_inode->i_op->create(parent->d_inode, child, mode);
+}
+
+int vfs_mkdir(const char *path, mode_t mode)
+{
+    char name[NAME_MAX + 1];
+    struct dentry *parent = vfs_lookup_parent(path, name);
+    if (!parent) return -ENOENT;
+    
+    struct dentry *child = kzalloc(sizeof(struct dentry), GFP_KERNEL);
+    for(int i=0; i<NAME_MAX && name[i]; i++) child->d_name[i] = name[i];
+    
+    if (!parent->d_inode->i_op || !parent->d_inode->i_op->mkdir) return -EPERM;
+    
+    return parent->d_inode->i_op->mkdir(parent->d_inode, child, mode);
+}
+
+int vfs_readdir(struct file *file, void *ctx, int (*filldir)(void *, const char *, int, loff_t, ino_t, unsigned))
+{
+    if (!file || !file->f_op || !file->f_op->readdir) {
+        return -EINVAL;
+    }
+    return file->f_op->readdir(file, ctx, filldir);
 }
 
 int vfs_close(struct file *file)
 {
-    if (!file) {
-        return -EBADF;
-    }
-    
-    /* Call release if defined */
+    if (!file) return -EBADF;
     if (file->f_op && file->f_op->release && file->f_dentry) {
         file->f_op->release(file->f_dentry->d_inode, file);
     }
-    
-    /* Decrement reference count */
     file->f_count.counter--;
-    
-    /* TODO: Free file structure if count reaches 0 */
-    
+    /* TODO: free if 0 */
     return 0;
 }
 
 ssize_t vfs_read(struct file *file, char *buf, size_t count)
 {
-    if (!file) {
-        return -EBADF;
-    }
-    
-    if (!buf) {
-        return -EFAULT;
-    }
-    
-    if (!file->f_op || !file->f_op->read) {
-        return -EINVAL;
-    }
-    
+    if (!file) return -EBADF;
+    if (!buf) return -EFAULT;
+    if (!file->f_op || !file->f_op->read) return -EINVAL;
     return file->f_op->read(file, buf, count, &file->f_pos);
 }
 
 ssize_t vfs_write(struct file *file, const char *buf, size_t count)
 {
-    if (!file) {
-        return -EBADF;
-    }
-    
-    if (!buf) {
-        return -EFAULT;
-    }
-    
-    if (!file->f_op || !file->f_op->write) {
-        return -EINVAL;
-    }
-    
+    if (!file) return -EBADF;
+    if (!buf) return -EFAULT;
+    if (!file->f_op || !file->f_op->write) return -EINVAL;
     return file->f_op->write(file, buf, count, &file->f_pos);
 }
 
 loff_t vfs_lseek(struct file *file, loff_t offset, int whence)
 {
-    if (!file) {
-        return -EBADF;
-    }
-    
+    if (!file) return -EBADF;
     loff_t new_pos;
     struct inode *inode = file->f_dentry ? file->f_dentry->d_inode : NULL;
     
     switch (whence) {
-        case SEEK_SET:
-            new_pos = offset;
+        case SEEK_SET: new_pos = offset; break;
+        case SEEK_CUR: new_pos = file->f_pos + offset; break;
+        case SEEK_END: 
+            if (!inode) return -EINVAL;
+            new_pos = inode->i_size + offset; 
             break;
-        case SEEK_CUR:
-            new_pos = file->f_pos + offset;
-            break;
-        case SEEK_END:
-            if (!inode) {
-                return -EINVAL;
-            }
-            new_pos = inode->i_size + offset;
-            break;
-        default:
-            return -EINVAL;
+        default: return -EINVAL;
     }
-    
-    if (new_pos < 0) {
-        return -EINVAL;
-    }
-    
+    if (new_pos < 0) return -EINVAL;
     file->f_pos = new_pos;
     return new_pos;
 }
 
-/* ===================================================================== */
-/* Directory operations */
-/* ===================================================================== */
-
-int vfs_mkdir(const char *path, mode_t mode)
+int vfs_rmdir(const char *path) { (void)path; return -ENOSYS; }
+int vfs_unlink(const char *path) { (void)path; return -ENOSYS; }
+int vfs_rename(const char *old, const char *new)
 {
-    (void)path;
-    (void)mode;
+    char old_name_buf[NAME_MAX + 1];
+    struct dentry *old_parent = vfs_lookup_parent(old, old_name_buf);
+    if (!old_parent) return -ENOENT;
     
-    printk(KERN_DEBUG "VFS: mkdir('%s', 0%o)\n", path, mode);
+    char new_name_buf[NAME_MAX + 1];
+    struct dentry *new_parent = vfs_lookup_parent(new, new_name_buf);
+    if (!new_parent) return -ENOENT;
     
-    /* TODO: Implement */
-    return -ENOSYS;
-}
-
-int vfs_rmdir(const char *path)
-{
-    (void)path;
+    /* Lookup full old dentry */
+    struct dentry *old_child = kzalloc(sizeof(struct dentry), GFP_KERNEL);
+    int i; 
+    for(i=0; i<NAME_MAX && old_name_buf[i]; i++) old_child->d_name[i] = old_name_buf[i];
+    old_child->d_name[i] = '\0';
     
-    printk(KERN_DEBUG "VFS: rmdir('%s')\n", path);
+    if (old_parent->d_inode->i_op && old_parent->d_inode->i_op->lookup) {
+        old_parent->d_inode->i_op->lookup(old_parent->d_inode, old_child);
+    }
     
-    /* TODO: Implement */
-    return -ENOSYS;
-}
-
-int vfs_unlink(const char *path)
-{
-    (void)path;
+    if (!old_child->d_inode) {
+        kfree(old_child);
+        return -ENOENT;
+    }
     
-    printk(KERN_DEBUG "VFS: unlink('%s')\n", path);
+    /* Construct new dentry pattern */
+    struct dentry *new_child = kzalloc(sizeof(struct dentry), GFP_KERNEL);
+    for(i=0; i<NAME_MAX && new_name_buf[i]; i++) new_child->d_name[i] = new_name_buf[i];
+    new_child->d_name[i] = '\0';
     
-    /* TODO: Implement */
-    return -ENOSYS;
-}
-
-int vfs_rename(const char *oldpath, const char *newpath)
-{
-    (void)oldpath;
-    (void)newpath;
+    /* Check if operation supported */
+    if (!old_parent->d_inode->i_op || !old_parent->d_inode->i_op->rename) {
+        kfree(old_child);
+        kfree(new_child);
+        return -EPERM; /* Should be ENOSYS/EPERM */
+    }
     
-    printk(KERN_DEBUG "VFS: rename('%s', '%s')\n", oldpath, newpath);
+    int ret = old_parent->d_inode->i_op->rename(old_parent->d_inode, old_child, new_parent->d_inode, new_child);
     
-    /* TODO: Implement */
-    return -ENOSYS;
+    kfree(old_child);
+    kfree(new_child);
+    return ret;
 }
 
 /* ===================================================================== */

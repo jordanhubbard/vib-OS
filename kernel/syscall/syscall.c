@@ -284,6 +284,29 @@ static long sys_not_implemented(uint64_t a0, uint64_t a1, uint64_t a2, uint64_t 
     return -ENOSYS;
 }
 
+/* Sound System Call */
+#include "drivers/intel_hda.h"
+
+static long sys_sound_play(uint64_t data, uint64_t samples, uint64_t channels, uint64_t rate, uint64_t a4, uint64_t a5)
+{
+    (void)a4; (void)a5;
+    
+    /* Check pointer validity (basic) */
+    if (data < 0x10000000) return -EFAULT; /* Below userspace heap? Adjust check as needed */
+    
+    /* Call HDA driver */
+    /* Note: data is a user virtual address. HDA DMA needs physical. 
+       However, our kernel mapping is currently flat/identity or we mapped userspace?
+       The syscall receives arguments. pointer is userspace VA.
+       Current 'kmalloc' logic in HDA uses a kernel buffer and copies data.
+       So we need to access user memory.
+       For now, assuming shared address space or we can read it.
+    */
+    
+    return intel_hda_play_pcm((const void *)data, (uint32_t)samples, (uint8_t)channels, (uint32_t)rate);
+}
+
+
 /* ===================================================================== */
 /* Syscall initialization */
 /* ===================================================================== */

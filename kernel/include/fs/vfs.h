@@ -299,6 +299,11 @@ struct file *vfs_open(const char *path, int flags, mode_t mode);
 int vfs_close(struct file *file);
 
 /**
+ * vfs_readdir - Read directory entries
+ */
+int vfs_readdir(struct file *file, void *ctx, int (*filldir)(void *, const char *, int, loff_t, ino_t, unsigned));
+
+/**
  * vfs_read - Read from a file
  */
 ssize_t vfs_read(struct file *file, char *buf, size_t count);

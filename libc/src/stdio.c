@@ -7,6 +7,8 @@
 #include "../include/stdlib.h"
 #include "../include/string.h"
 #include "../include/unistd.h"
+#include "../include/fcntl.h"
+#include "../include/errno.h"
 
 /* ===================================================================== */
 /* FILE structure */
@@ -23,19 +25,151 @@ struct _FILE {
     int buf_mode;
     int ungetc_char;
     int has_ungetc;
+    int in_use;
 };
 
 #define FILE_READ   1
 #define FILE_WRITE  2
+#define FILE_APPEND 4
+
+/* File pool for fopen */
+#define FILE_POOL_SIZE 16
+static FILE _file_pool[FILE_POOL_SIZE];
 
 /* Standard streams */
-static FILE _stdin  = { .fd = 0, .flags = FILE_READ,  .buf_mode = _IOLBF };
-static FILE _stdout = { .fd = 1, .flags = FILE_WRITE, .buf_mode = _IOLBF };
-static FILE _stderr = { .fd = 2, .flags = FILE_WRITE, .buf_mode = _IONBF };
+static FILE _stdin  = { .fd = 0, .flags = FILE_READ,  .buf_mode = _IOLBF, .in_use = 1 };
+static FILE _stdout = { .fd = 1, .flags = FILE_WRITE, .buf_mode = _IOLBF, .in_use = 1 };
+static FILE _stderr = { .fd = 2, .flags = FILE_WRITE, .buf_mode = _IONBF, .in_use = 1 };
 
 FILE *stdin  = &_stdin;
 FILE *stdout = &_stdout;
 FILE *stderr = &_stderr;
+
+/* ===================================================================== */
+/* File open/close */
+/* ===================================================================== */
+
+static FILE *_alloc_file(void)
+{
+    for (int i = 0; i < FILE_POOL_SIZE; i++) {
+        if (!_file_pool[i].in_use) {
+            memset(&_file_pool[i], 0, sizeof(FILE));
+            _file_pool[i].in_use = 1;
+            return &_file_pool[i];
+        }
+    }
+    return NULL;
+}
+
+FILE *fopen(const char *pathname, const char *mode)
+{
+    if (!pathname || !mode) return NULL;
+    
+    int flags = 0;
+    int oflags = 0;
+    
+    switch (mode[0]) {
+        case 'r':
+            flags = FILE_READ;
+            oflags = O_RDONLY;
+            if (mode[1] == '+') {
+                flags |= FILE_WRITE;
+                oflags = O_RDWR;
+            }
+            break;
+        case 'w':
+            flags = FILE_WRITE;
+            oflags = O_WRONLY | O_CREAT | O_TRUNC;
+            if (mode[1] == '+') {
+                flags |= FILE_READ;
+                oflags = O_RDWR | O_CREAT | O_TRUNC;
+            }
+            break;
+        case 'a':
+            flags = FILE_WRITE | FILE_APPEND;
+            oflags = O_WRONLY | O_CREAT | O_APPEND;
+            if (mode[1] == '+') {
+                flags |= FILE_READ;
+                oflags = O_RDWR | O_CREAT | O_APPEND;
+            }
+            break;
+        default:
+            return NULL;
+    }
+    
+    int fd = open(pathname, oflags);
+    if (fd < 0) return NULL;
+    
+    FILE *fp = _alloc_file();
+    if (!fp) {
+        close(fd);
+        return NULL;
+    }
+    
+    fp->fd = fd;
+    fp->flags = flags;
+    fp->buf_mode = _IOFBF;
+    
+    return fp;
+}
+
+int fclose(FILE *stream)
+{
+    if (!stream) return EOF;
+    if (stream == stdin || stream == stdout || stream == stderr) {
+        return 0;  /* Don't actually close standard streams */
+    }
+    
+    fflush(stream);
+    int ret = close(stream->fd);
+    stream->in_use = 0;
+    
+    return (ret < 0) ? EOF : 0;
+}
+
+FILE *freopen(const char *pathname, const char *mode, FILE *stream)
+{
+    if (!stream) return NULL;
+    
+    fflush(stream);
+    close(stream->fd);
+    
+    if (!pathname) {
+        /* Just change mode, not implemented */
+        return NULL;
+    }
+    
+    int flags = 0;
+    int oflags = 0;
+    
+    switch (mode[0]) {
+        case 'r':
+            flags = FILE_READ;
+            oflags = O_RDONLY;
+            break;
+        case 'w':
+            flags = FILE_WRITE;
+            oflags = O_WRONLY | O_CREAT | O_TRUNC;
+            break;
+        case 'a':
+            flags = FILE_WRITE | FILE_APPEND;
+            oflags = O_WRONLY | O_CREAT | O_APPEND;
+            break;
+        default:
+            return NULL;
+    }
+    
+    int fd = open(pathname, oflags);
+    if (fd < 0) return NULL;
+    
+    stream->fd = fd;
+    stream->flags = flags;
+    stream->error = 0;
+    stream->eof = 0;
+    stream->has_ungetc = 0;
+    
+    return stream;
+}
 
 /* ===================================================================== */
 /* Basic I/O */
@@ -451,4 +585,222 @@ void perror(const char *s)
         fputs(": ", stderr);
     }
     fputs("Error\n", stderr);
+}
+
+/* ===================================================================== */
+/* Formatted input (simplified) */
+/* ===================================================================== */
+
+static int _isspace(int c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+static int _isdigit(int c)
+{
+    return c >= '0' && c <= '9';
+}
+
+int vsscanf(const char *str, const char *format, va_list ap)
+{
+    const char *s = str;
+    int count = 0;
+    
+    while (*format && *s) {
+        if (_isspace(*format)) {
+            format++;
+            while (_isspace(*s)) s++;
+            continue;
+        }
+        
+        if (*format != '%') {
+            if (*format == *s) {
+                format++;
+                s++;
+                continue;
+            }
+            break;
+        }
+        
+        format++;  /* Skip '%' */
+        
+        /* Handle width specifier (ignored for now) */
+        int width = 0;
+        while (_isdigit(*format)) {
+            width = width * 10 + (*format - '0');
+            format++;
+        }
+        (void)width;
+        
+        /* Handle length modifier */
+        int is_long = 0;
+        if (*format == 'l') {
+            is_long = 1;
+            format++;
+            if (*format == 'l') format++;
+        } else if (*format == 'h') {
+            format++;
+            if (*format == 'h') format++;
+        }
+        
+        switch (*format) {
+            case 'd':
+            case 'i': {
+                while (_isspace(*s)) s++;
+                int sign = 1;
+                if (*s == '-') {
+                    sign = -1;
+                    s++;
+                } else if (*s == '+') {
+                    s++;
+                }
+                
+                if (!_isdigit(*s)) goto done;
+                
+                long val = 0;
+                while (_isdigit(*s)) {
+                    val = val * 10 + (*s - '0');
+                    s++;
+                }
+                val *= sign;
+                
+                if (is_long) {
+                    *va_arg(ap, long *) = val;
+                } else {
+                    *va_arg(ap, int *) = (int)val;
+                }
+                count++;
+                break;
+            }
+            
+            case 'u': {
+                while (_isspace(*s)) s++;
+                if (!_isdigit(*s)) goto done;
+                
+                unsigned long val = 0;
+                while (_isdigit(*s)) {
+                    val = val * 10 + (*s - '0');
+                    s++;
+                }
+                
+                if (is_long) {
+                    *va_arg(ap, unsigned long *) = val;
+                } else {
+                    *va_arg(ap, unsigned int *) = (unsigned int)val;
+                }
+                count++;
+                break;
+            }
+            
+            case 'x':
+            case 'X': {
+                while (_isspace(*s)) s++;
+                if (*s == '0' && (s[1] == 'x' || s[1] == 'X')) {
+                    s += 2;
+                }
+                
+                unsigned long val = 0;
+                while (1) {
+                    int digit;
+                    if (_isdigit(*s)) {
+                        digit = *s - '0';
+                    } else if (*s >= 'a' && *s <= 'f') {
+                        digit = *s - 'a' + 10;
+                    } else if (*s >= 'A' && *s <= 'F') {
+                        digit = *s - 'A' + 10;
+                    } else {
+                        break;
+                    }
+                    val = val * 16 + digit;
+                    s++;
+                }
+                
+                if (is_long) {
+                    *va_arg(ap, unsigned long *) = val;
+                } else {
+                    *va_arg(ap, unsigned int *) = (unsigned int)val;
+                }
+                count++;
+                break;
+            }
+            
+            case 's': {
+                while (_isspace(*s)) s++;
+                char *dest = va_arg(ap, char *);
+                while (*s && !_isspace(*s)) {
+                    *dest++ = *s++;
+                }
+                *dest = '\0';
+                count++;
+                break;
+            }
+            
+            case 'c': {
+                char *dest = va_arg(ap, char *);
+                *dest = *s++;
+                count++;
+                break;
+            }
+            
+            case '%':
+                if (*s == '%') s++;
+                else goto done;
+                break;
+                
+            case 'n': {
+                *va_arg(ap, int *) = (int)(s - str);
+                break;
+            }
+            
+            default:
+                goto done;
+        }
+        
+        format++;
+    }
+    
+done:
+    return count;
+}
+
+int sscanf(const char *str, const char *format, ...)
+{
+    va_list ap;
+    va_start(ap, format);
+    int ret = vsscanf(str, format, ap);
+    va_end(ap);
+    return ret;
+}
+
+int vfscanf(FILE *stream, const char *format, va_list ap)
+{
+    char buf[1024];
+    int i = 0;
+    int c;
+    
+    /* Read a line for simplicity */
+    while (i < 1023 && (c = fgetc(stream)) != EOF && c != '\n') {
+        buf[i++] = c;
+    }
+    buf[i] = '\0';
+    
+    return vsscanf(buf, format, ap);
+}
+
+int fscanf(FILE *stream, const char *format, ...)
+{
+    va_list ap;
+    va_start(ap, format);
+    int ret = vfscanf(stream, format, ap);
+    va_end(ap);
+    return ret;
+}
+
+int scanf(const char *format, ...)
+{
+    va_list ap;
+    va_start(ap, format);
+    int ret = vfscanf(stdin, format, ap);
+    va_end(ap);
+    return ret;
 }

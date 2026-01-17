@@ -283,6 +283,142 @@ static const struct file_operations ramfs_dir_ops = {
     .mmap = NULL,
 };
 
+static struct inode_operations ramfs_inode_ops; /* Forward decl */
+
+static struct dentry *ramfs_lookup(struct inode *dir, struct dentry *dentry)
+{
+    struct ramfs_inode *ram_dir = (struct ramfs_inode *)dir->i_private;
+    struct ramfs_inode *ram_child = ramfs_lookup_child(ram_dir, dentry->d_name);
+    
+    if (!ram_child) return NULL;
+    
+    /* Create VFS inode for child */
+    struct inode *inode = kzalloc(sizeof(struct inode), GFP_KERNEL);
+    if (!inode) return NULL;
+    
+    inode->i_ino = ram_child->ino;
+    inode->i_mode = ram_child->mode;
+    inode->i_size = ram_child->size;
+    inode->i_sb = dir->i_sb;
+    inode->i_op = &ramfs_inode_ops;
+    inode->i_fop = S_ISDIR(inode->i_mode) ? &ramfs_dir_ops : &ramfs_file_ops;
+    inode->i_private = ram_child;
+    
+    dentry->d_inode = inode;
+    
+    return NULL; /* NULL means success/found in cache (we just populated it) */
+}
+
+static int ramfs_create(struct inode *dir, struct dentry *dentry, mode_t mode)
+{
+    struct ramfs_inode *ram_dir = (struct ramfs_inode *)dir->i_private;
+    struct ramfs_inode *ram_file = ramfs_alloc_inode(S_IFREG | mode, dentry->d_name);
+    
+    if (!ram_file) return -ENOMEM;
+    
+    ramfs_add_child(ram_dir, ram_file);
+    
+    /* Create VFS inode */
+    struct inode *inode = kzalloc(sizeof(struct inode), GFP_KERNEL);
+    if (!inode) return -ENOMEM;
+    
+    inode->i_ino = ram_file->ino;
+    inode->i_mode = ram_file->mode;
+    inode->i_size = 0;
+    inode->i_sb = dir->i_sb;
+    inode->i_op = &ramfs_inode_ops;
+    inode->i_fop = &ramfs_file_ops;
+    inode->i_private = ram_file;
+    
+    dentry->d_inode = inode;
+    
+    return 0;
+}
+
+static int ramfs_mkdir(struct inode *dir, struct dentry *dentry, mode_t mode)
+{
+    struct ramfs_inode *ram_dir = (struct ramfs_inode *)dir->i_private;
+    struct ramfs_inode *ram_child = ramfs_alloc_inode(S_IFDIR | mode, dentry->d_name);
+    
+    if (!ram_child) return -ENOMEM;
+    
+    ramfs_add_child(ram_dir, ram_child);
+    
+    /* Create VFS inode */
+    struct inode *inode = kzalloc(sizeof(struct inode), GFP_KERNEL);
+    if (!inode) return -ENOMEM;
+    
+    inode->i_ino = ram_child->ino;
+    inode->i_mode = ram_child->mode;
+    inode->i_size = 0;
+    inode->i_sb = dir->i_sb;
+    inode->i_op = &ramfs_inode_ops;
+    inode->i_fop = &ramfs_dir_ops;
+    inode->i_private = ram_child;
+    
+    dentry->d_inode = inode;
+    
+    return 0;
+}
+
+static int ramfs_rename(struct inode *old_dir, struct dentry *old_dentry,
+                        struct inode *new_dir, struct dentry *new_dentry)
+{
+    struct ramfs_inode *old_ram_dir = (struct ramfs_inode *)old_dir->i_private;
+    struct ramfs_inode *new_ram_dir = (struct ramfs_inode *)new_dir->i_private;
+    struct ramfs_inode *target = (struct ramfs_inode *)old_dentry->d_inode->i_private;
+    
+    if (!target) return -ENOENT;
+    
+    /* TODO: Check if new name exists (overwrite) */
+    /* For now, just fail if exists for simplicity, or we should support overwrite? */
+    /* Let's keep it simple: if new exists, fail */
+    if (ramfs_lookup_child(new_ram_dir, new_dentry->d_name)) {
+        return -EEXIST;
+    }
+    
+    /* 1. Unlink from old_dir */
+    if (old_ram_dir->children == target) {
+        old_ram_dir->children = target->sibling;
+    } else {
+        struct ramfs_inode *curr = old_ram_dir->children;
+        while (curr && curr->sibling != target) {
+            curr = curr->sibling;
+        }
+        if (curr) curr->sibling = target->sibling;
+    }
+    
+    /* 2. Link to new_dir */
+    /* Only if different directory, but even if same dir we need to rename */
+    if (old_ram_dir != new_ram_dir) {
+        target->sibling = new_ram_dir->children;
+        new_ram_dir->children = target;
+        target->parent = new_ram_dir;
+    } else {
+        /* Re-link in same dir (it was removed above) */
+        target->sibling = old_ram_dir->children;
+        old_ram_dir->children = target;
+    }
+    
+    /* 3. Rename */
+    int i;
+    for (i = 0; i < RAMFS_MAX_NAME && new_dentry->d_name[i]; i++) {
+        target->name[i] = new_dentry->d_name[i];
+    }
+    target->name[i] = '\0';
+    
+    return 0;
+}
+
+static struct inode_operations ramfs_inode_ops = {
+    .lookup = ramfs_lookup,
+    .create = ramfs_create,
+    .mkdir = ramfs_mkdir,
+    .rmdir = NULL,
+    .unlink = NULL,
+    .rename = ramfs_rename,
+};
+
 /* ===================================================================== */
 /* Mounting */
 /* ===================================================================== */
@@ -300,7 +436,7 @@ static struct super_block *ramfs_mount(struct file_system_type *fs_type,
     ramfs_sb.next_ino = 1;
     ramfs_sb.inode_count = 0;
     
-    /* Create root inode */
+    /* Create ramfs root inode */
     ramfs_sb.root = ramfs_alloc_inode(S_IFDIR | 0755, "");
     if (!ramfs_sb.root) {
         return NULL;
@@ -312,11 +448,21 @@ static struct super_block *ramfs_mount(struct file_system_type *fs_type,
     sb.s_type = fs_type;
     sb.s_fs_info = &ramfs_sb;
     
+    /* Create VFS root inode */
+    static struct inode vfs_root_inode;
+    vfs_root_inode.i_ino = ramfs_sb.root->ino;
+    vfs_root_inode.i_mode = S_IFDIR | 0755;
+    vfs_root_inode.i_size = 0;
+    vfs_root_inode.i_sb = &sb;
+    vfs_root_inode.i_op = &ramfs_inode_ops;
+    vfs_root_inode.i_fop = &ramfs_dir_ops;
+    vfs_root_inode.i_private = ramfs_sb.root; /* Link to ramfs inode */
+    
     /* Create root dentry */
     static struct dentry root_dentry;
     root_dentry.d_name[0] = '/';
     root_dentry.d_name[1] = '\0';
-    root_dentry.d_inode = NULL;  /* Will point to VFS inode */
+    root_dentry.d_inode = &vfs_root_inode;  /* Point to VFS inode */
     root_dentry.d_parent = &root_dentry;
     root_dentry.d_child = NULL;
     root_dentry.d_sibling = NULL;

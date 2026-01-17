@@ -109,24 +109,6 @@ struct tcp_hdr {
 /* Network Interface */
 /* ===================================================================== */
 
-#define MAX_INTERFACES  4
-
-struct net_interface {
-    char name[16];
-    uint8_t mac[ETH_ALEN];
-    uint32_t ip;
-    uint32_t netmask;
-    uint32_t gateway;
-    bool up;
-    uint64_t rx_packets;
-    uint64_t tx_packets;
-    uint64_t rx_bytes;
-    uint64_t tx_bytes;
-};
-
-static struct net_interface interfaces[MAX_INTERFACES];
-static int num_interfaces = 0;
-
 /* ===================================================================== */
 /* ARP Cache */
 /* ===================================================================== */
@@ -142,6 +124,36 @@ struct arp_entry {
 };
 
 static struct arp_entry arp_cache[ARP_CACHE_SIZE];
+
+/* ===================================================================== */
+/* Network Interface Globals */
+/* ===================================================================== */
+
+#define MAX_INTERFACES  4
+static struct net_interface interfaces[MAX_INTERFACES];
+static int num_interfaces = 0;
+
+/* ===================================================================== */
+/* RX Handler */
+/* ===================================================================== */
+
+void net_rx(struct net_interface *iface, const void *data, size_t len)
+{
+    if (len < sizeof(struct eth_hdr)) return;
+    
+    struct eth_hdr *eth = (struct eth_hdr *)data;
+    uint16_t type = ntohs(eth->type);
+    
+    iface->rx_packets++;
+    iface->rx_bytes += len;
+    
+    /* TODO: Handle packet types */
+    /* if (type == ETH_P_ARP) arp_handle(...) */
+    /* if (type == ETH_P_IP) ip_handle(...) */
+    
+    // printk(KERN_DEBUG "NET: Received %zu bytes, type=0x%04x\n", len, type);
+}
+
 
 /* ===================================================================== */
 /* TCP Connection Table */
@@ -303,7 +315,12 @@ int arp_send_request(uint32_t target_ip)
     arp->sender_ip = iface->ip;
     arp->target_ip = target_ip;
     
-    /* TODO: Send packet via network driver */
+    /* Send packet via network driver */
+    if (iface->send) {
+        iface->send(iface, packet, sizeof(packet));
+        iface->tx_packets++;
+        iface->tx_bytes += sizeof(packet);
+    }
     printk(KERN_DEBUG "ARP: Sending request for IP\n");
     
     return 0;
@@ -358,7 +375,13 @@ int icmp_send_echo(uint32_t dest_ip, uint16_t id, uint16_t seq)
     icmp->checksum = 0;
     icmp->checksum = checksum(icmp, sizeof(struct icmp_hdr));
     
-    /* TODO: Send via driver */
+    /* Send via driver */
+    if (iface->send) {
+        iface->send(iface, packet, total_len);
+        iface->tx_packets++;
+        iface->tx_bytes += total_len;
+    }
+    printk(KERN_DEBUG "ICMP: Sent echo request to %08x\n", dest_ip);
     
     kfree(packet);
     return 0;
@@ -517,7 +540,12 @@ int udp_send(uint32_t dest_ip, uint16_t src_port, uint16_t dest_port,
         payload[i] = ((uint8_t *)data)[i];
     }
     
-    /* TODO: Send via driver */
+    /* Send via driver */
+    if (iface->send) {
+        iface->send(iface, packet, total_len);
+        iface->tx_packets++;
+        iface->tx_bytes += total_len;
+    }
     printk(KERN_DEBUG "UDP: Sent %zu bytes to port %u\n", len, dest_port);
     
     kfree(packet);
@@ -555,10 +583,10 @@ void tcpip_init(void)
 }
 
 /* Interface configuration */
-int net_add_interface(const char *name, uint8_t *mac, uint32_t ip, 
+struct net_interface *net_add_interface(const char *name, uint8_t *mac, uint32_t ip, 
                       uint32_t netmask, uint32_t gateway)
 {
-    if (num_interfaces >= MAX_INTERFACES) return -1;
+    if (num_interfaces >= MAX_INTERFACES) return NULL;
     
     struct net_interface *iface = &interfaces[num_interfaces++];
     
@@ -574,8 +602,9 @@ int net_add_interface(const char *name, uint8_t *mac, uint32_t ip,
     iface->netmask = netmask;
     iface->gateway = gateway;
     iface->up = true;
+    iface->send = NULL; /* Default */
     
     printk(KERN_INFO "NET: Added interface %s\n", name);
     
-    return 0;
+    return iface;
 }

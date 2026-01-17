@@ -152,6 +152,11 @@ static void init_subsystems(void *dtb)
     printk(KERN_INFO "  Initializing scheduler...\n");
     sched_init();
     
+    /* Initialize process subsystem */
+    printk(KERN_INFO "  Initializing process subsystem...\n");
+    extern void process_init(void);
+    process_init();
+    
     /* ================================================================= */
     /* Phase 4: Filesystems */
     /* ================================================================= */
@@ -160,13 +165,33 @@ static void init_subsystems(void *dtb)
     
     /* Initialize Virtual Filesystem */
     printk(KERN_INFO "  Initializing VFS...\n");
+    /* Initialize Virtual Filesystem */
+    printk(KERN_INFO "  Initializing VFS...\n");
     vfs_init();
+    
+    /* Initialize and Register RamFS */
+    printk(KERN_INFO "  Initializing RamFS...\n");
+    extern int ramfs_init(void);
+    ramfs_init();
     
     /* Mount root filesystem */
     printk(KERN_INFO "  Mounting root filesystem...\n");
-    /* TODO: mount_root(); */
+    if (vfs_mount("ramfs", "/", "ramfs", 0, NULL) != 0) {
+        panic("Failed to mount root filesystem!");
+    }
     
-    /* Mount proc, sys, dev */
+    /* Populate filesystem with sample data */
+    extern int ramfs_create_dir(const char *path, mode_t mode);
+    extern int ramfs_create_file(const char *path, mode_t mode, const char *content);
+    
+    ramfs_create_dir("Documents", 0755);
+    ramfs_create_dir("Downloads", 0755);
+    ramfs_create_dir("Pictures", 0755);
+    ramfs_create_dir("System", 0755);
+    ramfs_create_file("readme.txt", 0644, "Welcome to Vib-OS!\nThis is a real file in RamFS.");
+    ramfs_create_file("todo.txt", 0644, "- Implement Browser\n- Fix Bugs\n- Sleep");
+    
+    /* Mount proc, sys, dev (placeholders) */
     printk(KERN_INFO "  Mounting procfs...\n");
     printk(KERN_INFO "  Mounting sysfs...\n");
     printk(KERN_INFO "  Mounting devfs...\n");
@@ -198,8 +223,9 @@ static void init_subsystems(void *dtb)
         gui_init(fb_buffer, fb_width, fb_height, fb_width * 4);
         
         /* Create demo windows */
-        gui_create_window("Terminal", 50, 50, 400, 300);
-        gui_create_window("File Manager", 200, 100, 450, 350);
+    extern struct window *gui_create_file_manager(int x, int y);
+    gui_create_window("Terminal", 50, 50, 400, 300);
+    gui_create_file_manager(200, 100);
         
         /* Compose and display desktop */
         gui_compose();
@@ -208,10 +234,19 @@ static void init_subsystems(void *dtb)
         printk(KERN_INFO "  GUI desktop ready!\\n");
     }
     
+    /* Initialize PCI bus and detect devices (including Audio) */
+    printk(KERN_INFO "  Initializing PCI bus...\n");
+    extern void pci_init(void);
+    pci_init();
+    
     printk(KERN_INFO "  Loading keyboard driver...\n");
     printk(KERN_INFO "  Loading NVMe driver...\n");
     printk(KERN_INFO "  Loading USB driver...\n");
     printk(KERN_INFO "  Loading network driver...\n");
+    extern void tcpip_init(void);
+    extern int virtio_net_init(void);
+    tcpip_init();
+    virtio_net_init();
     
     /* ================================================================= */
     /* Phase 6: Enable Interrupts */
@@ -232,10 +267,15 @@ static void init_subsystems(void *dtb)
 static void *g_active_terminal = 0;
 
 /* Keyboard callback wrapper */
+/* Keyboard callback wrapper */
 static void keyboard_handler(int key)
 {
     extern void gui_handle_key_event(int key);
     gui_handle_key_event(key);
+    
+    /* Also send to KAPI input buffer for non-windowed apps (e.g. Doom) */
+    extern void kapi_sys_key_event(int key);
+    kapi_sys_key_event(key);
 }
 
 static void start_init_process(void)
@@ -290,7 +330,11 @@ static void start_init_process(void)
             needs_redraw = 1;
         }
         
-        /* Poll mouse for position and buttons */
+        /* Poll input system (Keyboard & Mouse) */
+        extern void input_poll(void);
+        input_poll();
+        
+        /* Get mouse state (updated by input_poll) */
         extern void mouse_get_position(int *x, int *y);
         extern int mouse_get_buttons(void);
         extern void gui_handle_mouse_event(int x, int y, int buttons);

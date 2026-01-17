@@ -247,6 +247,10 @@ run-gui: kernel
 		-device ramfb \
 		-device virtio-keyboard-device \
 		-device virtio-tablet-device \
+		-device virtio-net-device,netdev=net0 \
+		-netdev user,id=net0 \
+		-audiodev coreaudio,id=snd0 \
+		-device intel-hda -device hda-duplex,audiodev=snd0 \
 		-serial stdio \
 		-kernel $(KERNEL_BINARY)
 

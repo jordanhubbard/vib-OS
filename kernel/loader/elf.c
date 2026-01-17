@@ -188,6 +188,11 @@ int elf_load_at(const void *data, size_t size, uint64_t load_base, elf_load_info
 
     printk(KERN_INFO "[ELF] Entry point: 0x%llx\n", (unsigned long long)entry);
 
+    /* Debug: dump first instructions at entry */
+    uint32_t *code = (uint32_t *)entry;
+    printk(KERN_INFO "[ELF] Code at entry: %08x %08x %08x %08x\n",
+           code[0], code[1], code[2], code[3]);
+
     /* Fill info struct */
     if (info) {
         info->entry = entry;
