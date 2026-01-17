@@ -982,6 +982,11 @@ void gui_handle_mouse_event(int x, int y, int buttons)
             /* File menu - open Files window */
             gui_create_window("Files", 150, 80, 400, 350);
             return;
+        } else if (x >= 144 && x < 192) {
+            /* Edit menu - run test app */
+            extern int app_run(const char *name, int argc, char **argv);
+            app_run("test", 0, 0);
+            return;
         } else if (x >= 240 && x < 300) {
             /* Help menu - open Help window */
             gui_create_window("Help", 200, 100, 350, 280);

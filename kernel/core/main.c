@@ -324,8 +324,8 @@ static void start_init_process(void)
         frame++;
         (void)frame;
         
-        /* Frame rate limiting */
-        for (volatile int i = 0; i < 200000; i++) { }
+        /* Frame rate limiting - minimal delay for responsive UI */
+        for (volatile int i = 0; i < 50000; i++) { }
     }
 }
 

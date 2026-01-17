@@ -1,6 +1,6 @@
 # Vib-OS
 
-**A Production-Grade ARM64 Operating System with GUI**
+**ARM64 Operating System with GUI**
 
 ![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-ARM64-blue)
@@ -21,7 +21,7 @@ Vib-OS v0.5.0 - ARM64 with Full GUI
 
 ## Overview
 
-Vib-OS is a from-scratch, production-grade Unix-like operating system for ARM64. Built with **18,000+ lines** of C and Assembly:
+Vib-OS is a from-scratch,  Unix-like operating system for ARM64. Built with **18,000+ lines** of C and Assembly:
 
 - ✅ **macOS-style GUI** - Window manager with traffic light buttons, dock, menu bar
 - ✅ **Double-Buffered Compositor** - Flicker-free rendering

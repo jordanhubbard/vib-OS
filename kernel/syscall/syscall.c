@@ -134,30 +134,70 @@ static long sys_gettid(uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint6
     return current ? current->pid : -1;
 }
 
+/* Userspace heap management - dedicated region for userspace processes */
+#define USER_HEAP_START 0x10000000UL  /* 256MB mark */
+#define USER_HEAP_SIZE  0x04000000UL  /* 64MB heap */
+static uint64_t user_brk_current = USER_HEAP_START;
+static uint64_t user_mmap_current = USER_HEAP_START + USER_HEAP_SIZE / 2;  /* mmap from middle */
+
 static long sys_brk(uint64_t brk, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5)
 {
     (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
     
-    /* TODO: Implement heap management */
-    (void)brk;
+    /* If brk is 0 or less than start, return current brk */
+    if (brk == 0 || brk < USER_HEAP_START) {
+        return user_brk_current;
+    }
     
-    return -ENOSYS;
+    /* Check bounds */
+    if (brk > USER_HEAP_START + USER_HEAP_SIZE / 2) {
+        /* Would overlap with mmap region */
+        return user_brk_current;
+    }
+    
+    /* Extend brk */
+    user_brk_current = brk;
+    return user_brk_current;
 }
 
 static long sys_mmap(uint64_t addr, uint64_t len, uint64_t prot, uint64_t flags, uint64_t fd, uint64_t offset)
 {
-    (void)addr; (void)len; (void)prot; (void)flags; (void)fd; (void)offset;
+    (void)addr; (void)prot; (void)offset;
     
-    /* TODO: Implement memory mapping */
+    /* Only support anonymous mappings for now */
+    #define MAP_ANONYMOUS 0x20
+    if (!(flags & MAP_ANONYMOUS) || (int64_t)fd != -1) {
+        printk(KERN_DEBUG "sys_mmap: only anonymous mappings supported\n");
+        return -ENOSYS;
+    }
     
-    return -ENOSYS;
+    /* Align len to page size */
+    #define PAGE_SIZE 4096UL
+    len = (len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    
+    /* Check bounds */
+    if (user_mmap_current + len > USER_HEAP_START + USER_HEAP_SIZE) {
+        printk(KERN_WARNING "sys_mmap: out of memory\n");
+        return -ENOMEM;
+    }
+    
+    /* Allocate from mmap region */
+    uint64_t result = user_mmap_current;
+    user_mmap_current += len;
+    
+    /* Zero the memory */
+    uint8_t *p = (uint8_t *)result;
+    for (size_t i = 0; i < len; i++) p[i] = 0;
+    
+    return result;
 }
 
 static long sys_munmap(uint64_t addr, uint64_t len, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5)
 {
     (void)addr; (void)len; (void)a2; (void)a3; (void)a4; (void)a5;
     
-    return -ENOSYS;
+    /* For now, just no-op munmap - memory is not reclaimed */
+    return 0;
 }
 
 static long sys_clone(uint64_t flags, uint64_t stack, uint64_t ptid, uint64_t tls, uint64_t ctid, uint64_t a5)
