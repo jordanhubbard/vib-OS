@@ -238,8 +238,13 @@ $(BUILD_DIR)/drivers/%.o: $(DRIVERS_DIR)/%.c
 $(KERNEL_BINARY): $(ALL_OBJECTS)
 	@echo "[LD] $@"
 	@$(LD) $(LDFLAGS_KERNEL) -o $@ $^
-	@$(OBJDUMP) -h $@ > $(BUILD_DIR)/kernel/sections.txt
-	@echo "[INFO] Kernel sections written to $(BUILD_DIR)/kernel/sections.txt"
+	@if command -v $(OBJDUMP) >/dev/null 2>&1; then \
+		$(OBJDUMP) -h $@ > $(BUILD_DIR)/kernel/sections.txt; \
+		echo "[INFO] Kernel sections written to $(BUILD_DIR)/kernel/sections.txt"; \
+	else \
+		echo "[INFO] objdump not found, skipping sections dump"; \
+	fi
+	@echo "[KERNEL] $(ARCH) build complete: $@"
 
 # ============================================================================
 # Boot Image Creation

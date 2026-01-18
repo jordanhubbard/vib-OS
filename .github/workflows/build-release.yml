@@ -28,7 +28,8 @@ jobs:
             binutils-aarch64-linux-gnu \
             qemu-system-arm \
             make \
-            lld
+            lld \
+            llvm
       
       - name: Build ARM64 kernel
         run: |
@@ -79,6 +80,7 @@ jobs:
             qemu-system-x86 \
             make \
             lld \
+            llvm \
             xorriso \
             grub-pc-bin \
             grub-efi-amd64-bin \
