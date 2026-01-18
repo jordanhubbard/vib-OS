@@ -41,8 +41,6 @@ Vib-OS is a from-scratch, Unix-like operating system with **full multi-architect
 - ✅ **Memory Management**: MMU/paging for all architectures
 - ✅ **Interrupt Handling**: GICv3 (ARM64), APIC (x86_64), PIC (x86)
 
-See [Multi-Architecture Implementation](docs/MULTIARCH_IMPLEMENTATION.md) for technical details.
-
 ## 📸 Screenshots
 
 ### Desktop & File Manager
