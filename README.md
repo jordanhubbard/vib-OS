@@ -29,18 +29,19 @@ Vib-OS is a from-scratch, Unix-like operating system with **full multi-architect
 |--------------|-------------|--------|----------|
 | **ARM64** | Direct / UEFI | ✅ **Production Ready** | Raspberry Pi 4/5, QEMU virt, Apple Silicon (VM) |
 | **x86_64** | Direct / UEFI / BIOS | ✅ **Production Ready** | Modern PCs, QEMU, VirtualBox, VMware |
-| **x86** | BIOS (MBR) | 🚧 In Progress | Legacy PCs, QEMU pc |
+| **x86** | Direct / BIOS (MBR) | ✅ **Builds Successfully** | Legacy PCs, QEMU pc |
 
 ### What Works Now
 
 - ✅ **ARM64**: Fully tested and stable on QEMU and Raspberry Pi
 - ✅ **x86_64**: Kernel builds and boots successfully
+- ✅ **x86 32-bit**: Kernel builds successfully (testing in progress)
 - ✅ **Architecture Abstraction Layer**: Clean separation of arch-specific code
-- ✅ **Context Switching**: Working for both ARM64 and x86_64
-- ✅ **Memory Management**: MMU/paging for both architectures
-- ✅ **Interrupt Handling**: GICv3 (ARM64) and APIC (x86_64)
+- ✅ **Context Switching**: Working for ARM64, x86_64, and x86
+- ✅ **Memory Management**: MMU/paging for all architectures
+- ✅ **Interrupt Handling**: GICv3 (ARM64), APIC (x86_64), PIC (x86)
 
-See [Multi-Architecture Documentation](MULTIARCH_COMPLETE.md) for technical details.
+See [Multi-Architecture Implementation](docs/MULTIARCH_IMPLEMENTATION.md) for technical details.
 
 ## 📸 Screenshots
 
