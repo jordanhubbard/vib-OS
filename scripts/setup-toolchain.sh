@@ -45,12 +45,31 @@ fi
 log_info "Updating Homebrew..."
 brew update
 
-# Install LLVM (cross-compiler for ARM64)
-log_info "Installing LLVM toolchain..."
-brew install llvm
+# Prefer Apple/Xcode clang if available; otherwise fall back to Homebrew LLVM.
+if xcrun --find clang >/dev/null 2>&1; then
+    log_info "Xcode/Command Line Tools clang found; will use Apple clang by default"
+    NEED_BREW_LLVM=0
+else
+    log_warn "Xcode/Command Line Tools not found; installing Homebrew LLVM as fallback"
+    NEED_BREW_LLVM=1
+fi
 
-# Add LLVM to PATH for this session
-export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
+# LLD is required for ELF linking on macOS (provided by Homebrew)
+log_info "Installing LLD linker..."
+brew install lld
+
+if [ "$NEED_BREW_LLVM" -eq 1 ]; then
+    log_info "Installing LLVM toolchain (fallback)..."
+    brew install llvm
+fi
+
+# Add LLD (and LLVM if installed) to PATH for this session
+LLD_PREFIX="$(brew --prefix lld)"
+export PATH="$LLD_PREFIX/bin:$PATH"
+if [ "$NEED_BREW_LLVM" -eq 1 ]; then
+    LLVM_PREFIX="$(brew --prefix llvm)"
+    export PATH="$LLVM_PREFIX/bin:$PATH"
+fi
 
 # Install additional build tools
 log_info "Installing build tools..."
@@ -75,43 +94,36 @@ brew install aarch64-elf-gcc aarch64-elf-binutils || {
     log_warn "ARM64 GCC not available via Homebrew, will use LLVM"
 }
 
-# Download and setup musl libc source
-MUSL_VERSION="1.2.4"
-MUSL_DIR="$(pwd)/libc"
-if [ ! -f "$MUSL_DIR/configure" ]; then
-    log_info "Downloading musl libc source..."
-    mkdir -p "$MUSL_DIR"
-    wget -q "https://musl.libc.org/releases/musl-${MUSL_VERSION}.tar.gz" -O /tmp/musl.tar.gz
-    tar -xzf /tmp/musl.tar.gz -C "$MUSL_DIR" --strip-components=1
-    rm /tmp/musl.tar.gz
-    log_info "musl libc source downloaded to $MUSL_DIR"
-else
-    log_info "musl libc source already present"
-fi
-
 # Create toolchain configuration file
 log_info "Creating toolchain configuration..."
 cat > toolchain.mk << 'EOF'
 # Auto-generated toolchain configuration
 # Source this file or include in Makefile
 
-# LLVM paths (Homebrew on Apple Silicon)
-LLVM_PATH := /opt/homebrew/opt/llvm
+XCRUN_CLANG := $(shell xcrun --find clang 2>/dev/null)
+XCRUN_CXX := $(shell xcrun --find clang++ 2>/dev/null)
 
-# Toolchain binaries
-export CC := $(LLVM_PATH)/bin/clang
-export CXX := $(LLVM_PATH)/bin/clang++
-export LD := $(LLVM_PATH)/bin/ld.lld
-export AR := $(LLVM_PATH)/bin/llvm-ar
-export AS := $(LLVM_PATH)/bin/clang
-export OBJCOPY := $(LLVM_PATH)/bin/llvm-objcopy
-export OBJDUMP := $(LLVM_PATH)/bin/llvm-objdump
-export STRIP := $(LLVM_PATH)/bin/llvm-strip
-export NM := $(LLVM_PATH)/bin/llvm-nm
-export RANLIB := $(LLVM_PATH)/bin/llvm-ranlib
+# Homebrew prefixes
+LLVM_PREFIX := $(shell brew --prefix llvm 2>/dev/null)
+LLD_PREFIX := $(shell brew --prefix lld 2>/dev/null)
+
+LLVM_BIN := $(LLVM_PREFIX)/bin
+LLD_BIN := $(LLD_PREFIX)/bin
+
+# Toolchain binaries (prefer Xcode/CLT clang if present)
+export CC := $(if $(strip $(XCRUN_CLANG)),$(XCRUN_CLANG),$(LLVM_BIN)/clang)
+export CXX := $(if $(strip $(XCRUN_CXX)),$(XCRUN_CXX),$(LLVM_BIN)/clang++)
+export LD := $(LLD_BIN)/ld.lld
+export AR := $(if $(wildcard $(LLVM_BIN)/llvm-ar),$(LLVM_BIN)/llvm-ar,ar)
+export AS := $(if $(strip $(XCRUN_CLANG)),$(XCRUN_CLANG),$(LLVM_BIN)/clang)
+export OBJCOPY := $(if $(wildcard $(LLVM_BIN)/llvm-objcopy),$(LLVM_BIN)/llvm-objcopy,)
+export OBJDUMP := $(if $(wildcard $(LLVM_BIN)/llvm-objdump),$(LLVM_BIN)/llvm-objdump,)
+export STRIP := $(if $(wildcard $(LLVM_BIN)/llvm-strip),$(LLVM_BIN)/llvm-strip,strip)
+export NM := $(if $(wildcard $(LLVM_BIN)/llvm-nm),$(LLVM_BIN)/llvm-nm,nm)
+export RANLIB := $(if $(wildcard $(LLVM_BIN)/llvm-ranlib),$(LLVM_BIN)/llvm-ranlib,ranlib)
 
 # Add to PATH
-export PATH := $(LLVM_PATH)/bin:$(PATH)
+export PATH := $(LLD_BIN):$(LLVM_BIN):$(PATH)
 EOF
 
 # Create shell configuration for manual builds
@@ -120,16 +132,36 @@ cat > toolchain.env << 'EOF'
 # Source this file before manual builds
 # Usage: source toolchain.env
 
-export LLVM_PATH="/opt/homebrew/opt/llvm"
-export PATH="$LLVM_PATH/bin:$PATH"
+export LLD_PREFIX="$(brew --prefix lld)"
 
-export CC="$LLVM_PATH/bin/clang"
-export CXX="$LLVM_PATH/bin/clang++"
-export LD="$LLVM_PATH/bin/ld.lld"
-export AR="$LLVM_PATH/bin/llvm-ar"
-export AS="$LLVM_PATH/bin/clang"
-export OBJCOPY="$LLVM_PATH/bin/llvm-objcopy"
-export OBJDUMP="$LLVM_PATH/bin/llvm-objdump"
+XCRUN_CLANG="$(xcrun --find clang 2>/dev/null || true)"
+XCRUN_CXX="$(xcrun --find clang++ 2>/dev/null || true)"
+LLVM_PREFIX="$(brew --prefix llvm 2>/dev/null || true)"
+
+export PATH="$LLD_PREFIX/bin:$PATH"
+if [ -n "$LLVM_PREFIX" ]; then
+  export PATH="$LLVM_PREFIX/bin:$PATH"
+fi
+
+export LD="$LLD_PREFIX/bin/ld.lld"
+
+if [ -n "$XCRUN_CLANG" ]; then
+  export CC="$XCRUN_CLANG"
+  export CXX="$XCRUN_CXX"
+  export AS="$XCRUN_CLANG"
+else
+  export CC="$LLVM_PREFIX/bin/clang"
+  export CXX="$LLVM_PREFIX/bin/clang++"
+  export AS="$LLVM_PREFIX/bin/clang"
+fi
+
+if [ -n "$LLVM_PREFIX" ]; then
+  export AR="$LLVM_PREFIX/bin/llvm-ar"
+  export OBJCOPY="$LLVM_PREFIX/bin/llvm-objcopy"
+  export OBJDUMP="$LLVM_PREFIX/bin/llvm-objdump"
+else
+  export AR="ar"
+fi
 
 echo "Toolchain configured for ARM64 cross-compilation"
 EOF
@@ -140,15 +172,15 @@ chmod +x toolchain.env
 log_info "Verifying toolchain installation..."
 echo ""
 
-echo -n "LLVM/Clang: "
-if /opt/homebrew/opt/llvm/bin/clang --version | head -1; then
+echo -n "Clang: "
+if clang --version | head -1; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗${NC}"
 fi
 
 echo -n "LLD Linker: "
-if /opt/homebrew/opt/llvm/bin/ld.lld --version | head -1; then
+if "${LLD_PREFIX}/bin/ld.lld" --version | head -1; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗${NC}"

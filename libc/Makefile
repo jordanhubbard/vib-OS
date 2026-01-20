@@ -1,9 +1,8 @@
 # UnixOS libc Makefile
 
-CC = clang
-AS = clang
-AR = llvm-ar
-RANLIB = llvm-ranlib
+CC ?= clang
+AS ?= clang
+AR ?= ar
 
 TARGET = --target=aarch64-linux-musl
 
@@ -61,7 +60,6 @@ $(BUILD_DIR)/%.o: crt/%.S
 $(LIBC): $(C_OBJECTS)
 	@echo "[AR] $@"
 	@$(AR) rcs $@ $^
-	@$(RANLIB) $@
 
 $(CRT0): crt/crt0.S | $(BUILD_DIR)
 	@echo "[CRT] $@"

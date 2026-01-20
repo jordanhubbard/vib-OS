@@ -23,10 +23,10 @@ run_test() {
     echo -n "  Testing $name... "
     if eval "$cmd" > /dev/null 2>&1; then
         echo -e "${GREEN}PASS${NC}"
-        ((PASSED++))
+        PASSED=$((PASSED + 1))
     else
         echo -e "${RED}FAIL${NC}"
-        ((FAILED++))
+        FAILED=$((FAILED + 1))
     fi
 }
 
@@ -44,7 +44,7 @@ echo "Toolchain Tests"
 echo "---------------"
 
 run_test "Clang available" "which clang"
-run_test "LLD available" "which ld.lld || [ -f /opt/homebrew/opt/llvm/bin/ld.lld ]"
+run_test "LLD available" "command -v ld.lld || [ -x /opt/homebrew/opt/lld/bin/ld.lld ] || [ -x /usr/local/opt/lld/bin/ld.lld ]"
 run_test "QEMU ARM64" "which qemu-system-aarch64"
 
 echo ""

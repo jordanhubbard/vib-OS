@@ -111,20 +111,6 @@ else
     exit 1
 fi
 
-# Download and setup musl libc source
-MUSL_VERSION="1.2.4"
-MUSL_DIR="$(pwd)/libc"
-if [ ! -f "$MUSL_DIR/configure" ]; then
-    log_info "Downloading musl libc source..."
-    mkdir -p "$MUSL_DIR"
-    wget -q "https://musl.libc.org/releases/musl-${MUSL_VERSION}.tar.gz" -O /tmp/musl.tar.gz
-    tar -xzf /tmp/musl.tar.gz -C "$MUSL_DIR" --strip-components=1
-    rm /tmp/musl.tar.gz
-    log_info "musl libc source downloaded to $MUSL_DIR"
-else
-    log_info "musl libc source already present"
-fi
-
 # Create toolchain configuration file
 log_info "Creating toolchain configuration..."
 cat > toolchain.mk << 'EOF'

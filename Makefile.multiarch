@@ -23,6 +23,9 @@ SYSROOT := $(BUILD_DIR)/sysroot
 # Detect host OS
 UNAME_S := $(shell uname -s)
 
+# Optional local toolchain overrides (created by scripts/setup-toolchain*.sh)
+-include toolchain.mk
+
 # ============================================================================
 # Architecture-Specific Configuration
 # ============================================================================
@@ -60,25 +63,81 @@ endif
 # ============================================================================
 
 ifeq ($(UNAME_S),Darwin)
-    # macOS with Homebrew
-    LLVM_PATH ?= /opt/homebrew/opt/llvm/bin
-    BREW_PATH ?= /opt/homebrew/bin
-    export PATH := $(LLVM_PATH):$(BREW_PATH):$(PATH)
-    CC := $(LLVM_PATH)/clang
-    AS := $(LLVM_PATH)/clang
-    LD := $(BREW_PATH)/ld.lld
-    AR := $(LLVM_PATH)/llvm-ar
-    OBJCOPY := $(LLVM_PATH)/llvm-objcopy
-    OBJDUMP := $(LLVM_PATH)/llvm-objdump
+    # macOS: prefer Xcode/CLT clang; if not installed, fall back to Homebrew LLVM.
+    BREW_PREFIX ?= $(shell command -v brew >/dev/null 2>&1 && brew --prefix || true)
+    LLVM_BIN ?= $(firstword \
+        $(wildcard $(BREW_PREFIX)/opt/llvm/bin) \
+        $(wildcard /opt/homebrew/opt/llvm/bin) \
+        $(wildcard /usr/local/opt/llvm/bin))
+    LLD_BIN ?= $(firstword \
+        $(wildcard $(BREW_PREFIX)/opt/lld/bin) \
+        $(wildcard /opt/homebrew/opt/lld/bin) \
+        $(wildcard /usr/local/opt/lld/bin))
+    ifneq ($(LLVM_BIN),)
+        export PATH := $(LLVM_BIN):$(PATH)
+    endif
+    ifneq ($(LLD_BIN),)
+        export PATH := $(LLD_BIN):$(PATH)
+    endif
+
+    DETECTED_CC := $(firstword $(shell xcrun --find clang 2>/dev/null) $(wildcard $(LLVM_BIN)/clang) $(shell command -v clang 2>/dev/null))
+    DETECTED_LD := $(firstword $(wildcard $(LLD_BIN)/ld.lld) $(wildcard $(LLVM_BIN)/ld.lld) $(shell command -v ld.lld 2>/dev/null))
+    DETECTED_AR := $(firstword $(wildcard $(LLVM_BIN)/llvm-ar) $(shell command -v llvm-ar 2>/dev/null) $(shell command -v ar 2>/dev/null))
+    DETECTED_OBJCOPY := $(firstword $(wildcard $(LLVM_BIN)/llvm-objcopy) $(shell command -v llvm-objcopy 2>/dev/null))
+    DETECTED_OBJDUMP := $(firstword $(wildcard $(LLVM_BIN)/llvm-objdump) $(shell command -v llvm-objdump 2>/dev/null))
+
+    ifneq ($(filter undefined default,$(origin CC)),)
+        CC := $(DETECTED_CC)
+    endif
+    ifneq ($(filter undefined default,$(origin AS)),)
+        AS := $(CC)
+    endif
+    ifneq ($(filter undefined default,$(origin LD)),)
+        LD := $(DETECTED_LD)
+    endif
+    ifneq ($(filter undefined default,$(origin AR)),)
+        AR := $(DETECTED_AR)
+    endif
+    ifneq ($(filter undefined default,$(origin OBJCOPY)),)
+        OBJCOPY := $(DETECTED_OBJCOPY)
+    endif
+    ifneq ($(filter undefined default,$(origin OBJDUMP)),)
+        OBJDUMP := $(DETECTED_OBJDUMP)
+    endif
+
+    ifeq ($(CC),)
+        $(error clang not found. Install Xcode Command Line Tools (xcode-select --install) or Homebrew LLVM (brew install llvm))
+    endif
+    ifeq ($(LD),)
+        $(error ld.lld not found. Install LLD (brew install lld) or set LD=/path/to/ld.lld)
+    endif
 else
     # Linux
-    LLVM_PATH ?= /usr/bin
-    CC := clang
-    AS := clang
-    LD := ld.lld
-    AR := llvm-ar
-    OBJCOPY := llvm-objcopy
-    OBJDUMP := llvm-objdump
+    ifneq ($(filter undefined default,$(origin CC)),)
+        CC := clang
+    endif
+    ifneq ($(filter undefined default,$(origin AS)),)
+        AS := clang
+    endif
+    ifneq ($(filter undefined default,$(origin LD)),)
+        LD := ld.lld
+    endif
+    ifneq ($(filter undefined default,$(origin AR)),)
+        AR := llvm-ar
+    endif
+    ifneq ($(filter undefined default,$(origin OBJCOPY)),)
+        OBJCOPY := llvm-objcopy
+    endif
+    ifneq ($(filter undefined default,$(origin OBJDUMP)),)
+        OBJDUMP := llvm-objdump
+    endif
+
+    ifeq ($(shell command -v $(CC) 2>/dev/null),)
+        $(error clang not found. Run: sudo apt install clang lld)
+    endif
+    ifeq ($(shell command -v $(LD) 2>/dev/null),)
+        $(error ld.lld not found. Run: sudo apt install lld)
+    endif
 endif
 
 # ============================================================================
