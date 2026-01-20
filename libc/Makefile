@@ -49,11 +49,11 @@ $(BUILD_DIR):
 	@mkdir -p $(SYSROOT)/usr/lib
 	@mkdir -p $(SYSROOT)/usr/include
 
-$(BUILD_DIR)/%.o: src/%.c
+$(BUILD_DIR)/%.o: src/%.c | $(BUILD_DIR)
 	@echo "[CC] $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/%.o: crt/%.S
+$(BUILD_DIR)/%.o: crt/%.S | $(BUILD_DIR)
 	@echo "[AS] $<"
 	@$(AS) $(ASFLAGS) -c $< -o $@
 
